@@ -30,6 +30,9 @@ class AzureStorage:
         blob_client.upload_blob(io.BytesIO(data), overwrite=True)
         return filename  # blob key
 
+    def locate(self, key: str) -> str:
+        return key  # blobs are addressed by key
+
     def save_bytes(self, data: bytes, key: str) -> str:
         blob_client = self._client.get_blob_client(container=self._container, blob=key)
         blob_client.upload_blob(io.BytesIO(data), overwrite=True)

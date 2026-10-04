@@ -18,6 +18,11 @@ class LocalStorage:
                 await f.write(chunk)
         return str(dest)
 
+    def locate(self, key: str) -> str:
+        """The identifier save_bytes() would return for this key (here, its path), so a
+        caller that only knows the key can read or delete it later."""
+        return str(self.upload_dir / key)
+
     def save_bytes(self, data: bytes, key: str) -> str:
         dest = self.upload_dir / key
         dest.parent.mkdir(parents=True, exist_ok=True)

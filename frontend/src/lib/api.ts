@@ -240,3 +240,73 @@ export function askQuestion(
 export function clearMessages(documentId: string): Promise<void> {
   return request<void>(`/api/assistant/${documentId}/messages`, { method: 'DELETE' });
 }
+
+// ── Search and visual navigation ───────────────────────────────────────────
+
+export interface Snippet {
+  text: string;
+  spans: [number, number][];
+}
+
+export interface SearchResult {
+  page_number: number;
+  label: string;
+  sheet_number: string | null;
+  sheet_title: string | null;
+  score: number;
+  match_count: number;
+  kind: 'text' | 'sheet' | 'page';
+  title_match: boolean;
+  snippets: Snippet[];
+}
+
+export interface SearchResponse {
+  query: string;
+  mode: 'all' | 'partial' | 'none';
+  suggestion: string | null;
+  total_pages: number;
+  results: SearchResult[];
+}
+
+/** A region of a page as fractions (0..1) of the displayed page. */
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  text: string;
+}
+
+export interface SheetReference {
+  target_page: number;
+  target_label: string;
+  target_title: string | null;
+  text: string;
+  box: Box;
+}
+
+export function searchDocument(documentId: string, q: string, limit = 40): Promise<SearchResponse> {
+  return request<SearchResponse>(
+    `/api/assistant/${documentId}/search?q=${encodeURIComponent(q)}&limit=${limit}`
+  );
+}
+
+export function getHighlights(
+  documentId: string,
+  pageNumber: number,
+  q: string,
+  phrases: string[] = []
+): Promise<{ page_number: number; boxes: Box[] }> {
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  for (const p of phrases.slice(0, 10)) params.append('phrase', p);
+  return request(`/api/assistant/${documentId}/pages/${pageNumber}/highlights?${params}`);
+}
+
+export function getReferences(documentId: string, pageNumber: number): Promise<SheetReference[]> {
+  return request<SheetReference[]>(`/api/assistant/${documentId}/pages/${pageNumber}/references`);
+}
+
+export function thumbnailUrl(documentId: string, pageNumber: number, width = 240): string {
+  return `${API_BASE}/api/assistant/${documentId}/pages/${pageNumber}/thumbnail?w=${width}`;
+}

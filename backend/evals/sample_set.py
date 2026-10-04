@@ -125,7 +125,8 @@ def build_sample_pdf() -> bytes:
 # title block read as TITLE / NUMBER / "DESCRIPTION:" - the format that defeated the
 # letter-prefix detector on a real set. Same ground-truth idea as SHEETS above.
 NUMERIC_SHEETS: list[tuple[str, str, list[str]]] = [
-    ("1.1a", "EQUIPMENT PLAN", ["BOH PREP AREA", "MOUNT AT 18\" A.F.F. SEE 1.6", "1 MOP SINK  FIAT MSB-2424"]),
+    ("1.1a", "EQUIPMENT PLAN", ["BOH PREP AREA", "MOUNT AT 18\" A.F.F. SEE 1.6", "1 MOP SINK  FIAT MSB-2424",
+                                "REFER TO 1.3 FOR CEILING HEIGHT", "TOILET 1.3 GPF"]),
     ("1.3", "REFLECTED CEILING PLAN", [
         "NEW SUSPENDED 2'x2' GRID CEILING", "10'-8\" A.F.F. TYPICAL THROUGHOUT EXCEPT", "WASHROOM  8'-6\" A.F.F.",
         "2'x2' RECESSED FIXTURE  MFR: SYLVANIA  CODE: PANELF-1A-032-UNV-D-8-40",

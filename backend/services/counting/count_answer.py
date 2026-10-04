@@ -61,7 +61,9 @@ def _sources(outcome: CountOutcome, metas: dict[int, PageMeta]) -> list[dict]:
     for page_number, n in sorted(primary.per_page.items()):
         meta = metas[page_number]
         evidence = [
-            {"quote": d["text"][:200], "location": "legend/schedule", "confirmed": True}
+            # "Legend: " is a label added here, not text on the sheet; leave it out so the
+            # quote can be located (and highlighted) in the viewer.
+            {"quote": d["text"].removeprefix("Legend: ")[:200], "location": "legend/schedule", "confirmed": True}
             for d in outcome.definitions if d["page_number"] == page_number
         ][:3]
         sources.append({

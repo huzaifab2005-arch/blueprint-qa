@@ -50,6 +50,26 @@ def page_image_key(document_id: uuid.UUID, page_number: int) -> str:
     return f"pages/{document_id}/{page_number}.jpg"
 
 
+# Thumbnails are cached in storage at a few fixed widths, so they can be cleaned up.
+THUMB_WIDTHS = (240, 360, 480, 640)
+
+
+def snap_thumb_width(w: int) -> int:
+    return min(THUMB_WIDTHS, key=lambda t: abs(t - w))
+
+
+def thumbnail_key(document_id: uuid.UUID, page_number: int, width: int) -> str:
+    return f"pages/{document_id}/thumb_{page_number}_{width}.jpg"
+
+
+def _delete_thumbnails(storage, document_id: uuid.UUID, page_number: int) -> None:
+    for w in THUMB_WIDTHS:
+        try:
+            storage.delete(storage.locate(thumbnail_key(document_id, page_number, w)))
+        except Exception:
+            pass
+
+
 def count_pdf_pages(pdf_path: str) -> int:
     from pdf2image import pdfinfo_from_path
     return int(pdfinfo_from_path(pdf_path)["Pages"])
@@ -159,9 +179,10 @@ async def run_indexing(document_id: uuid.UUID) -> None:
 
             # Drop any previous index (re-index), including stored images.
             old = (await db.execute(
-                select(DocumentPage.image_path).where(DocumentPage.document_id == document_id)
-            )).scalars().all()
-            for path in old:
+                select(DocumentPage.page_number, DocumentPage.image_path).where(DocumentPage.document_id == document_id)
+            )).all()
+            for old_no, path in old:
+                _delete_thumbnails(storage, document_id, old_no)
                 if path:
                     try:
                         storage.delete(path)
@@ -217,10 +238,11 @@ async def run_indexing(document_id: uuid.UUID) -> None:
 async def delete_page_images(db, document_id: uuid.UUID) -> None:
     """Best-effort removal of stored page images (DB rows cascade on their own)."""
     storage = get_storage()
-    paths = (await db.execute(
-        select(DocumentPage.image_path).where(DocumentPage.document_id == document_id)
-    )).scalars().all()
-    for path in paths:
+    rows = (await db.execute(
+        select(DocumentPage.page_number, DocumentPage.image_path).where(DocumentPage.document_id == document_id)
+    )).all()
+    for page_no, path in rows:
+        _delete_thumbnails(storage, document_id, page_no)
         if path:
             try:
                 storage.delete(path)

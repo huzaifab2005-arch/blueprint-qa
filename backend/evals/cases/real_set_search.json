@@ -1,0 +1,95 @@
+[
+ {
+  "id": "s-go-sheet",
+  "query": "go to 1.3",
+  "first": "1.3"
+ },
+ {
+  "id": "s-pdf-page",
+  "query": "page 17",
+  "first": "4.0"
+ },
+ {
+  "id": "s-product-code",
+  "query": "KB200",
+  "expected_sheets": [
+   "1.1a"
+  ],
+  "first": "1.1a"
+ },
+ {
+  "id": "s-part-number",
+  "query": "MSB-2424",
+  "expected_sheets": [
+   "1.1a"
+  ],
+  "first": "1.1a"
+ },
+ {
+  "id": "s-lighting-code",
+  "query": "PANELF-1A-032",
+  "expected_sheets": [
+   "1.3"
+  ],
+  "first": "1.3"
+ },
+ {
+  "id": "s-track",
+  "query": "T6BST",
+  "expected_sheets": [
+   "1.3"
+  ],
+  "first": "1.3"
+ },
+ {
+  "id": "s-phrase",
+  "query": "\"recessed fixture\"",
+  "expected_sheets": [
+   "1.3"
+  ],
+  "first": "1.3"
+ },
+ {
+  "id": "s-dimension",
+  "query": "10'-8\"",
+  "expected_sheets": [
+   "1.3",
+   "2.1"
+  ]
+ },
+ {
+  "id": "s-abbrev",
+  "query": "a.f.f.",
+  "expected_sheets": [
+   "1.3",
+   "1.1a"
+  ]
+ },
+ {
+  "id": "s-two-words",
+  "query": "baby change",
+  "expected_sheets": [
+   "1.1a"
+  ],
+  "first": "1.1a"
+ },
+ {
+  "id": "s-title",
+  "query": "lighting legend",
+  "expected_sheets": [
+   "1.3"
+  ],
+  "first": "1.3"
+ },
+ {
+  "id": "s-typo",
+  "query": "washrm",
+  "expect_none": true,
+  "suggestion": "washroom"
+ },
+ {
+  "id": "s-absent",
+  "query": "chiller",
+  "expect_none": true
+ }
+]

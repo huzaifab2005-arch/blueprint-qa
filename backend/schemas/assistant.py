@@ -97,3 +97,52 @@ class MessageRead(BaseModel):
 class AskResponse(BaseModel):
     question: MessageRead
     answer: MessageRead
+
+
+# ── Search and navigation ───────────────────────────────────────────────────
+
+class SnippetRead(BaseModel):
+    text: str
+    spans: list[list[int]] = []        # [start, end) character ranges of matches within text
+
+
+class SearchResultRead(BaseModel):
+    page_number: int
+    label: str
+    sheet_number: str | None = None
+    sheet_title: str | None = None
+    score: float
+    match_count: int
+    kind: str = "text"                 # text | sheet | page
+    title_match: bool = False
+    snippets: list[SnippetRead] = []
+
+
+class SearchResponseRead(BaseModel):
+    query: str
+    mode: str                          # all | partial | none
+    suggestion: str | None = None
+    total_pages: int
+    results: list[SearchResultRead]
+
+
+class BoxRead(BaseModel):
+    """A region of a page as fractions (0..1) of the displayed page."""
+    x: float
+    y: float
+    w: float
+    h: float
+    text: str = ""
+
+
+class HighlightsRead(BaseModel):
+    page_number: int
+    boxes: list[BoxRead]
+
+
+class ReferenceRead(BaseModel):
+    target_page: int
+    target_label: str
+    target_title: str | None = None
+    text: str
+    box: BoxRead

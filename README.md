@@ -40,6 +40,17 @@ question -> (follow-up rewrite) -> retrieve top pages (BM25 over text + sheet me
 
 **Notes**: indexing runs in the API process after the request returns (progress is polled); a restart mid-index can be retried from the UI. Page images live in the configured storage backend, so on Render's ephemeral `/tmp` they are lost on redeploy (as is the PDF itself). Run tests with `pip install -r backend/requirements-dev.txt && pytest`.
 
+### Search and visual navigation (Phase 2)
+
+The **Search & Sheets** tab turns the indexed set into something you can look through:
+
+- **Search** (`GET /api/assistant/{id}/search`): literal search across every sheet. All words must be on a sheet (quoted text is a phrase; the last word may be a prefix, so results appear as you type); tags and sizes match however the drawing writes them (`RTU-1` = `rtu1`, `2x4` = `2'x4'`); a dimension like `10'-8"` keeps its foot and inch marks; a sheet number finds that sheet first (`1.3`, `go to E2.01`, `page 7`). If no sheet has every word, sheets with some are shown and labelled as partial; a query that matches nothing offers a spelling taken from the document's own words. Search needs only the database.
+- **Highlights** (`.../pages/{n}/highlights`): where the matches are on a sheet, from the PDF's word positions. Step through them with `n`/`p` or the buttons, "Zoom to match", or jump to the next sheet with a match. The same endpoint locates a cited quote, so an answer's source opens with its evidence highlighted.
+- **Cross-references** (`.../pages/{n}/references`): "REFER TO DRAWING 1.1b" becomes a clickable region that opens sheet 1.1b, with a Back button. Letter-prefixed numbers (E2.01) count anywhere; plain numbers (1.3) only after a cue word (REFER TO, SEE, DRAWING) or as a detail callout, because "1.3" is also a dimension and a quantity.
+- **Sheet grid** (`.../pages/{n}/thumbnail`): thumbnails of every sheet, made on first request and cached.
+
+Limits: search matches text, so a note drawn as a picture is not searchable; highlights and references need the original PDF (if storage has lost it they are unavailable but text search still works); text split across wrapped lines is found by words, not as one phrase.
+
 ### Object counting (Phase 3)
 
 Ask "How many 2x4 lights?", "How many RTUs?", "How many diffusers?", "How many doors?", "How many toilets?". A counting question is detected and answered by a separate pipeline, not by the language model:

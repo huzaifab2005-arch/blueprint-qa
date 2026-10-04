@@ -6,8 +6,9 @@
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import IssueList from '$lib/components/IssueList.svelte';
   import Assistant from '$lib/components/Assistant.svelte';
+  import DrawingSearch from '$lib/components/DrawingSearch.svelte';
 
-  let tab: 'qa' | 'assistant' = 'qa';
+  let tab: 'qa' | 'assistant' | 'search' = 'qa';
 
   let document: Document | null = null;
   let issues: Issue[] = [];
@@ -168,10 +169,19 @@
       class="-mb-px border-b-2 px-4 py-2 text-sm font-medium {tab === 'assistant' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'}"
       on:click={() => (tab = 'assistant')}
     >Drawing Assistant</button>
+    <button
+      role="tab" aria-selected={tab === 'search'}
+      class="-mb-px border-b-2 px-4 py-2 text-sm font-medium {tab === 'search' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'}"
+      on:click={() => (tab = 'search')}
+    >Search &amp; Sheets</button>
   </div>
 
   {#if tab === 'assistant'}
     <Assistant documentId={document.id} />
+  {/if}
+
+  {#if tab === 'search'}
+    <DrawingSearch documentId={document.id} />
   {/if}
 
   {#if tab === 'qa'}

@@ -365,6 +365,8 @@ async def test_count_answer_is_cross_checked_with_markers_sources_and_persistenc
     assert a["verified"] is True and a["confidence"] == "high"
     assert [s["label"] for s in a["sources"]] == ["E2.01"] and a["sources"][0]["note"] == "8 counted"
     assert a["content"].startswith("8 ") and "not guaranteed" not in a["content"]
+    quotes = [e["quote"] for e in a["sources"][0]["evidence"]]
+    assert quotes and not any(q.startswith("Legend:") for q in quotes)         # locatable on the sheet
     assert any("not guaranteed" in w for w in a["warnings"])          # the standing disclaimer
     assert not client.llm.calls                                       # no model call was needed
 
@@ -489,3 +491,74 @@ async def test_counting_works_without_an_api_key_but_language_answers_do_not(cli
     assert ok.status_code == 200 and ok.json()["answer"]["count_result"]["quantity"] == 8
     qa = await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "Which page has the lighting schedule?"})
     assert qa.status_code == 503 and "NVIDIA_API_KEY" in qa.json()["detail"]
+
+
+# ── Phase 2: search and visual navigation through the API ───────────────────
+
+async def _upload_numeric_set(client):
+    from backend.evals.sample_set import build_numeric_titleblock_pdf
+
+    r = await client.post("/api/documents/upload",
+                          files={"file": ("n.pdf", build_numeric_titleblock_pdf(), "application/pdf")})
+    doc_id = r.json()["id"]
+    await client.post(f"/api/assistant/{doc_id}/index")
+    assert (await client.get(f"/api/assistant/{doc_id}/index")).json()["status"] == "ready"
+    return doc_id
+
+
+async def test_search_endpoint_finds_sheets_snippets_and_suggestions(client):
+    doc = await _upload_numeric_set(client)
+    r = (await client.get(f"/api/assistant/{doc}/search", params={"q": "ceiling height"})).json()
+    assert r["mode"] == "all" and [x["label"] for x in r["results"]] == ["1.1a", "1.3"] or r["results"][0]["label"] in ("1.1a", "1.3")
+    top = r["results"][0]
+    assert top["snippets"] and top["snippets"][0]["spans"]
+    jump = (await client.get(f"/api/assistant/{doc}/search", params={"q": "go to 4.0"})).json()["results"][0]
+    assert jump["label"] == "4.0" and jump["kind"] == "sheet"
+    typo = (await client.get(f"/api/assistant/{doc}/search", params={"q": "washrom"})).json()
+    assert typo["mode"] == "none" and typo["suggestion"] == "washroom"
+    assert (await client.get(f"/api/assistant/{doc}/search", params={"q": ""})).status_code == 422
+    missing = "00000000-0000-0000-0000-000000000000"
+    assert (await client.get(f"/api/assistant/{missing}/search", params={"q": "x"})).status_code == 404
+
+
+async def test_highlights_references_and_thumbnails_endpoints(client, tmp_path):
+    doc = await _upload_numeric_set(client)
+    pages = (await client.get(f"/api/assistant/{doc}/pages")).json()
+    by_label = {p["label"]: p["page_number"] for p in pages}
+
+    hl = (await client.get(f"/api/assistant/{doc}/pages/{by_label['1.3']}/highlights", params={"q": "ceiling"})).json()
+    assert hl["boxes"] and all(0 <= b["x"] <= 1 and 0 < b["w"] < 1 for b in hl["boxes"])
+    quote = (await client.get(f"/api/assistant/{doc}/pages/{by_label['1.3']}/highlights",
+                              params={"phrase": "PANELF-1A-032"})).json()
+    assert len(quote["boxes"]) >= 1                                              # a cited quote can be located
+
+    refs = (await client.get(f"/api/assistant/{doc}/pages/{by_label['1.1a']}/references")).json()
+    assert [r["target_label"] for r in refs] == ["1.3"] and refs[0]["target_page"] == by_label["1.3"]
+
+    t = await client.get(f"/api/assistant/{doc}/pages/{by_label['1.3']}/thumbnail", params={"w": 300})
+    assert t.status_code == 200 and t.headers["content-type"] == "image/jpeg"
+    from PIL import Image
+    import io
+    assert Image.open(io.BytesIO(t.content)).width <= 360                        # snapped to a cached size
+    cached = list((tmp_path / "uploads" / "pages").rglob("thumb_*"))
+    assert len(cached) == 1
+    # The second request is served from the cache: delete the source image and it still works.
+    for f in (tmp_path / "uploads" / "pages").rglob("2.jpg"):
+        f.unlink()
+    again = await client.get(f"/api/assistant/{doc}/pages/{by_label['1.3']}/thumbnail", params={"w": 300})
+    assert again.status_code == 200 and again.content == t.content
+
+    assert (await client.delete(f"/api/documents/{doc}")).status_code == 204
+    assert list((tmp_path / "uploads" / "pages").rglob("thumb_*")) == []         # no orphaned cache files
+
+
+async def test_navigation_endpoints_degrade_when_the_pdf_is_gone(client, tmp_path):
+    import shutil
+    doc = await _upload_numeric_set(client)
+    shutil.rmtree(tmp_path / "uploads" / "pages", ignore_errors=True)
+    for f in (tmp_path / "uploads").glob("*.pdf"):
+        f.unlink()
+    r = await client.get(f"/api/assistant/{doc}/pages/1/highlights", params={"q": "x"})
+    assert r.status_code == 404 and "no longer in storage" in r.json()["detail"]
+    # Text search needs only the database, so it still works.
+    assert (await client.get(f"/api/assistant/{doc}/search", params={"q": "ceiling"})).status_code == 200

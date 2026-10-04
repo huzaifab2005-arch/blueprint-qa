@@ -148,6 +148,10 @@ def summarise(results: list[CaseResult]) -> dict:
 
     pos = [r for r in results if r.kind == "positive"]
     neg = [r for r in results if r.kind == "negative"]
+    searches = [r for r in results if r.kind == "search"]
+    if searches:
+        return {"cases": len(results), "passed": sum(r.ok for r in results),
+                "search_pass_rate": rate([r.ok for r in searches]), "false_answer_rate": None}
     summary = {
         "cases": len(results),
         "passed": sum(r.ok for r in results),
@@ -178,6 +182,32 @@ def index_pdf_offline(pdf_path: str, max_pages: int = 150) -> list[tuple[int, st
         processed = process_page(pdf_path, n)
         sheet, title = detect_sheet_metadata(processed.raw_text, processed.text)
         out.append((n, sheet, title, processed.text))
+    return out
+
+
+def run_search(pdf_path: str, cases: list[dict]) -> list[CaseResult]:
+    """Literal-search quality, offline. A case is
+    {"id", "query", "expected_sheets": [...], "first": "1.3"?, "expect_none": true?, "suggestion": "washroom"?}.
+    A sheet counts as found if it is among the results; "first" pins the top result."""
+    from backend.services.search_service import PageRecord, search_pages
+
+    pages = index_pdf_offline(pdf_path)
+    records = [PageRecord(n, text, sheet, title) for n, sheet, title, text in pages]
+    out = []
+    for case in cases:
+        resp = search_pages(records, case["query"])
+        got = [r.label for r in resp.results]
+        problems = []
+        if case.get("expect_none") and resp.results:
+            problems.append(f"expected no results, got {got[:5]}")
+        missing = [x for x in case.get("expected_sheets", []) if _norm_sheet(x) not in {_norm_sheet(g) for g in got}]
+        if missing:
+            problems.append(f"missing {missing}; got {got[:6]}")
+        if case.get("first") and (not got or _norm_sheet(got[0]) != _norm_sheet(case["first"])):
+            problems.append(f"top result {got[:1]}, expected {case['first']}")
+        if case.get("suggestion") and resp.suggestion != case["suggestion"]:
+            problems.append(f"suggestion {resp.suggestion!r}, expected {case['suggestion']!r}")
+        out.append(CaseResult(case["id"], not problems, "; ".join(problems), kind="search"))
     return out
 
 
@@ -268,7 +298,7 @@ async def run_inprocess(pdf_path: str, cases: list[dict]) -> list[CaseResult]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--mode", choices=["retrieval", "full"], default="retrieval")
+    ap.add_argument("--mode", choices=["retrieval", "full", "search"], default="retrieval")
     ap.add_argument("--pdf")
     ap.add_argument("--cases")
     ap.add_argument("--sample", action="store_true", help="use the built-in synthetic drawing set")
@@ -299,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.mode == "retrieval":
         results = run_retrieval(pdf, cases, args.top_k)
+    elif args.mode == "search":
+        results = run_search(pdf, cases)
     else:
         if not args.skip_preflight:
             from backend.evals.preflight import run_checks

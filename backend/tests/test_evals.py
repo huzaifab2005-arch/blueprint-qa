@@ -104,3 +104,21 @@ def test_inprocess_runner_scores_the_counting_fixture_end_to_end(tmp_path, monke
     summary = run_eval.summarise(results)
     assert summary["false_verified_rate"] == 0 and summary["count_accuracy"] == 1.0
     assert any(r.status == "cross_checked" and r.answer for r in results)      # answers are kept for reading
+
+
+def test_search_mode_scores_search_quality(tmp_path):
+    from backend.evals.sample_set import build_numeric_titleblock_pdf
+
+    pdf = tmp_path / "n.pdf"
+    pdf.write_bytes(build_numeric_titleblock_pdf())
+    cases = [
+        {"id": "jump", "query": "go to 4.0", "first": "4.0"},
+        {"id": "text", "query": "ceiling height", "expected_sheets": ["1.1a"]},
+        {"id": "typo", "query": "washrom", "expect_none": True, "suggestion": "washroom"},
+        {"id": "absent", "query": "chiller", "expect_none": True},
+        {"id": "wrong-expectation", "query": "ceiling height", "expected_sheets": ["4.0"]},      # must be reported as a failure
+    ]
+    results = run_eval.run_search(str(pdf), cases)
+    assert [r.ok for r in results] == [True, True, True, True, False]
+    assert "missing" in results[-1].detail
+    assert run_eval.summarise(results)["search_pass_rate"] == 0.8

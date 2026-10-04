@@ -1,6 +1,6 @@
 # Case files for a real drawing set
 
-`real_set_qa.json` and `real_set_count.json` were written for one real 25-sheet set (a
+`real_set_qa.json`, `real_set_count.json` and `real_set_search.json` were written for one real 25-sheet set (a
 tenant-improvement drawing set uploaded during development; the PDF itself is not in the
 repo). Each expected value was checked by hand against the drawings. They show the case
 format documented in `../run_eval.py`; for your own drawings, copy and edit them.
