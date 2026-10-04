@@ -4,17 +4,18 @@ import pytest
 
 pytest.importorskip("reportlab")
 
+from backend.config import get_settings
 from backend.evals import run_eval
 from backend.evals.run_eval import CaseResult, score_answer, score_retrieval, summarise
 from backend.evals.sample_set import CASES, build_sample_pdf
 
 
 def test_retrieval_regression_on_sample_set(tmp_path):
-    """Every question in the sample set must retrieve the sheets it needs in the top 4.
+    """Every question in the sample set must retrieve the sheets it needs in the top-K (ASSISTANT_TOP_K).
     If a retrieval change breaks this, it made the assistant worse at finding pages."""
     pdf = tmp_path / "s.pdf"
     pdf.write_bytes(build_sample_pdf())
-    results = run_eval.run_retrieval(str(pdf), CASES, top_k=4)
+    results = run_eval.run_retrieval(str(pdf), CASES, top_k=get_settings().assistant_top_k)
     failures = [f"{r.id}: {r.detail}" for r in results if not r.ok]
     assert not failures, failures
     assert len(results) >= 15

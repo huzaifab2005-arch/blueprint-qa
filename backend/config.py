@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     # Empty means "use llm_vision_model" for the text-only synthesis step.
     llm_text_model: str = ""
     assistant_max_index_pages: int = 150
-    assistant_top_k: int = 4
+    assistant_top_k: int = 5
     assistant_max_page_chars: int = 12000
     # Longest side, in pixels, of the image sent to the vision model per page.
     assistant_model_image_px: int = 1600

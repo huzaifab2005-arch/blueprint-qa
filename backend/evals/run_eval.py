@@ -200,9 +200,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cases")
     ap.add_argument("--sample", action="store_true", help="use the built-in synthetic drawing set")
     ap.add_argument("--api", default="http://localhost:8000")
-    ap.add_argument("--top-k", type=int, default=4)
+    ap.add_argument("--top-k", type=int, default=None, help="default: ASSISTANT_TOP_K")
     ap.add_argument("--json", action="store_true", help="print the summary as JSON")
     args = ap.parse_args(argv)
+    if args.top_k is None:
+        from backend.config import get_settings
+        args.top_k = get_settings().assistant_top_k
 
     tmp = None
     if args.sample:

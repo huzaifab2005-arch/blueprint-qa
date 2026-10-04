@@ -274,8 +274,10 @@ async def test_overflow_and_unreadable_pages_are_disclosed(client, monkeypatch):
     monkeypatch.setattr(indexing_service, "extract_text_layer", lambda path, n, mode="-layout": "" if n == 7 else real(path, n, mode))
     monkeypatch.setattr(indexing_service, "ocr_page", lambda img: "")
     doc_id = await upload_and_index(client, pages)
+    settings = get_settings()
     a = (await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "What model is RTU-1?"})).json()["answer"]
-    assert len(a["pages_searched"]) == 4
+    assert len(a["pages_searched"]) == settings.assistant_top_k
+    assert len(pages) > settings.assistant_top_k  # the premise: more sheets matched than are read
     assert any("also matched but were not read" in w for w in a["warnings"])
     assert any("no readable text" in w for w in a["warnings"])
 
