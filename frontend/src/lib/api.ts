@@ -161,6 +161,39 @@ export interface AnswerSource {
   evidence: Evidence[];
 }
 
+export type CountStatus = 'cross_checked' | 'single_source' | 'needs_verification' | 'not_found';
+
+/** One counted object, as a box in fractions (0..1) of the displayed page. */
+export interface CountMarker {
+  page_number: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label: string;
+}
+
+export interface CountMethod {
+  method: 'tag_instances' | 'symbol' | 'schedule_qty' | 'schedule_rows' | 'vision';
+  quantity: number;
+  detail: string;
+  per_page: Record<string, number>;
+  breakdown: Record<string, number>;
+}
+
+export interface CountResult {
+  status: CountStatus;
+  quantity: number | null;
+  object: string;
+  primary: string | null;
+  methods: CountMethod[];
+  markers: CountMarker[];
+  definitions: { page_number: number; label: string; text: string }[];
+  blocking: string[];
+  pages_searched: number[];
+  markers_truncated: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -170,6 +203,7 @@ export interface ChatMessage {
   sources: AnswerSource[];
   pages_searched: number[];
   warnings: string[];
+  count_result: CountResult | null;
   created_at: string;
 }
 

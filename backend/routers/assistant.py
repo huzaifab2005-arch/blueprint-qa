@@ -16,6 +16,8 @@ from backend.schemas.assistant import (
 from backend.services.assistant_service import (
     AssistantError, NotIndexed, answer_question,
 )
+from backend.services.counting.count_answer import answer_count_question
+from backend.services.counting.objects import is_count_question, parse_count_question
 from backend.services.drawing_metadata import page_label
 from backend.services.indexing_service import begin_indexing, run_indexing
 from backend.storage import get_storage
@@ -132,7 +134,7 @@ async def clear_messages(document_id: uuid.UUID, db: AsyncSession = Depends(get_
 
 @router.post("/{document_id}/ask", response_model=AskResponse)
 async def ask(document_id: uuid.UUID, body: AskRequest, db: AsyncSession = Depends(get_db)):
-    await _require_document(db, document_id)
+    document = await _require_document(db, document_id)
 
     index = await db.get(DocumentIndex, document_id)
     if index is None or index.status != "ready":
@@ -151,8 +153,19 @@ async def ask(document_id: uuid.UUID, body: AskRequest, db: AsyncSession = Depen
         .limit(settings.assistant_history_messages)
     )).scalars().all()))
 
+    parsed = parse_count_question(question) if is_count_question(question) else None
     try:
-        result = await answer_question(db, document_id, question, history)
+        if parsed is not None:
+            pages = list((await db.execute(
+                select(DocumentPage)
+                .where(DocumentPage.document_id == document_id)
+                .order_by(DocumentPage.page_number)
+            )).scalars().all())
+            if not pages:
+                raise NotIndexed("This document has not been indexed yet.")
+            result = await answer_count_question(document, pages, question, parsed)
+        else:
+            result = await answer_question(db, document_id, question, history)
     except NotIndexed as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except AssistantError as exc:
@@ -171,6 +184,7 @@ async def ask(document_id: uuid.UUID, body: AskRequest, db: AsyncSession = Depen
         sources=result.sources,
         pages_searched=result.pages_searched,
         warnings=result.warnings,
+        count_result=result.count_result,
     )
     db.add(assistant_msg)
     await db.commit()
@@ -189,5 +203,6 @@ def _message_read(m: ChatMessage) -> MessageRead:
         sources=m.sources or [],
         pages_searched=m.pages_searched or [],
         warnings=m.warnings or [],
+        count_result=m.count_result,
         created_at=m.created_at,
     )

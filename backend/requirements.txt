@@ -16,6 +16,8 @@ httpx==0.28.0
 openai==3.1.0
 pdf2image==1.17.0
 pytesseract==0.3.13
+# Words and vector shapes for object counting (MIT licensed; pure Python).
+pdfplumber==0.11.10
 Pillow==11.0.0
 aiofiles==24.1.0
 # Optional: only required when STORAGE_BACKEND=azure

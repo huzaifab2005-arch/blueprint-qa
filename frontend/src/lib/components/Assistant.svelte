@@ -3,7 +3,9 @@
   import {
     askQuestion, clearMessages, getIndexStatus, getMessages, listPages, startIndexing,
   } from '$lib/api';
-  import type { AnswerSource, ChatMessage, DrawingPage, Evidence, IndexStatus } from '$lib/api';
+  import type {
+    AnswerSource, ChatMessage, CountMarker, CountResult, CountStatus, DrawingPage, Evidence, IndexStatus,
+  } from '$lib/api';
   import PageViewer from './PageViewer.svelte';
 
   export let documentId: string;
@@ -11,8 +13,8 @@
   const EXAMPLES = [
     'Which page contains the lighting schedule?',
     'What model is RTU-1?',
-    'How many RTUs are shown?',
-    'What are the duct sizes?',
+    'How many RTUs?',
+    'How many 2x4 lights?',
   ];
 
   let status: IndexStatus | null = null;
@@ -23,7 +25,7 @@
   let error = '';
   let loading = true;
   let showIndex = false;
-  let viewer: { page: number; evidence: Evidence[] } | null = null;
+  let viewer: { page: number; evidence: Evidence[]; markers: CountMarker[] } | null = null;
   let scroller: HTMLDivElement;
   let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -100,7 +102,7 @@
     // Show the question immediately; the server persists the turn once it succeeds.
     const pending: ChatMessage = {
       id: `pending-${Date.now()}`, role: 'user', content: q, verified: null, confidence: null,
-      sources: [], pages_searched: [], warnings: [], created_at: new Date().toISOString(),
+      sources: [], pages_searched: [], warnings: [], count_result: null, created_at: new Date().toISOString(),
     };
     messages = [...messages, pending];
     await scrollDown();
@@ -136,13 +138,50 @@
     await beginIndexing();
   }
 
-  function open(page: number, evidence: Evidence[] = []) {
-    viewer = { page, evidence };
+  function open(page: number, evidence: Evidence[] = [], markers: CountMarker[] = []) {
+    viewer = { page, evidence, markers };
   }
 
-  function openSource(s: AnswerSource) {
-    open(s.page_number, s.evidence);
+  function openSource(s: AnswerSource, m?: ChatMessage) {
+    open(s.page_number, s.evidence, m?.count_result?.markers ?? []);
   }
+
+  /** Open a sheet that has counted objects on it, with all markers loaded. */
+  function openCounted(c: CountResult, page?: number) {
+    const first = page ?? c.markers[0]?.page_number ?? Number(Object.keys(c.methods[0]?.per_page ?? {})[0]);
+    if (first) open(first, [], c.markers);
+  }
+
+  const statusInfo: Record<CountStatus, { label: string; badge: string; note: string }> = {
+    cross_checked: {
+      label: 'Cross-checked',
+      badge: 'bg-green-100 text-green-800',
+      note: 'Two independent readings of the drawing agree. This is still a count read from the drawing, not a guarantee.',
+    },
+    single_source: {
+      label: 'One source: verify',
+      badge: 'bg-amber-100 text-amber-800',
+      note: 'Only one reading of the drawing produced this number. Check the marked sheet.',
+    },
+    needs_verification: {
+      label: 'Needs verification',
+      badge: 'bg-red-100 text-red-800',
+      note: 'Do not rely on this number until it is checked against the drawing.',
+    },
+    not_found: {
+      label: 'Not counted',
+      badge: 'bg-gray-100 text-gray-700',
+      note: 'Nothing countable was found. That does not prove there are none.',
+    },
+  };
+
+  const methodNames: Record<string, string> = {
+    tag_instances: 'Tag labels on the plan',
+    symbol: 'Legend symbol matched on the plan',
+    schedule_qty: 'Schedule quantity column',
+    schedule_rows: 'Schedule rows',
+    vision: 'Vision-model estimate',
+  };
 
   function pageLabel(n: number): string {
     return pages.find((p) => p.page_number === n)?.label ?? `Page ${n}`;
@@ -221,7 +260,9 @@
             <div class="flex">
               <div class="max-w-[92%] rounded-2xl rounded-bl-sm border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800">
                 <div class="mb-2 flex flex-wrap items-center gap-2">
-                  {#if m.verified}
+                  {#if m.count_result}
+                    <span class="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">Object count</span>
+                  {:else if m.verified}
                     <span class="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-800">Found in drawings</span>
                     {#if m.confidence}
                       <span class="rounded-full px-2 py-0.5 text-[11px] font-semibold {confidenceStyle[m.confidence]}">{m.confidence} confidence</span>
@@ -230,6 +271,75 @@
                     <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">Not verified</span>
                   {/if}
                 </div>
+
+                {#if m.count_result}
+                  {@const c = m.count_result}
+                  {@const info = statusInfo[c.status]}
+                  <div class="mb-3 rounded-lg border border-gray-200 bg-gray-50 p-3" data-testid="count-card">
+                    <div class="flex flex-wrap items-baseline gap-3">
+                      {#if c.quantity !== null}
+                        <span class="text-4xl font-extrabold tabular-nums text-gray-900">
+                          {c.status === 'needs_verification' ? '≈ ' : ''}{c.quantity}
+                        </span>
+                        <span class="text-sm text-gray-600">{c.object}{c.quantity === 1 ? '' : 's'}</span>
+                      {:else}
+                        <span class="text-lg font-semibold text-gray-500">No count</span>
+                      {/if}
+                      <span class="rounded-full px-2 py-0.5 text-[11px] font-semibold {info.badge}">{info.label}</span>
+                    </div>
+                    <p class="mt-1 text-xs text-gray-500">{info.note}</p>
+
+                    {#if c.blocking.length > 0}
+                      <div class="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-800">
+                        <p class="font-semibold">Why this needs verification</p>
+                        <ul class="ml-4 list-disc">
+                          {#each c.blocking as b}<li>{b}</li>{/each}
+                        </ul>
+                      </div>
+                    {/if}
+
+                    {#if c.methods.length > 0}
+                      <div class="mt-2">
+                        <p class="text-[11px] font-semibold uppercase tracking-wide text-gray-400">How it was counted</p>
+                        <ul class="mt-1 space-y-0.5">
+                          {#each c.methods as meth}
+                            <li class="text-xs text-gray-600">
+                              <span class="font-semibold tabular-nums text-gray-800">{meth.quantity}</span>
+                              <span class="text-gray-400">·</span>
+                              {methodNames[meth.method] ?? meth.method}
+                              {#if meth.method === c.primary}<span class="ml-1 rounded bg-blue-50 px-1 text-[10px] text-blue-700">headline</span>{/if}
+                              <span class="block pl-5 text-gray-400">{meth.detail}</span>
+                            </li>
+                          {/each}
+                        </ul>
+                      </div>
+                    {/if}
+
+                    {#if c.methods[0] && Object.keys(c.methods[0].per_page).length > 0}
+                      <div class="mt-2 flex flex-wrap items-center gap-1.5">
+                        <span class="text-[11px] font-semibold uppercase tracking-wide text-gray-400">By sheet</span>
+                        {#each Object.entries(c.methods[0].per_page) as [pg, n]}
+                          <button
+                            class="rounded-md border border-blue-200 bg-white px-2 py-0.5 text-xs text-blue-700 hover:bg-blue-50"
+                            on:click={() => openCounted(c, Number(pg))}
+                          >{pageLabel(Number(pg))}: {n}</button>
+                        {/each}
+                      </div>
+                    {/if}
+
+                    {#if c.methods.length > 0}
+                      <button class="btn-primary mt-3 text-xs" on:click={() => openCounted(c)}>
+                        View marked sheet{c.markers.length ? ` (${c.markers.length} outlined)` : ''}
+                      </button>
+                      {#if c.markers.length === 0}
+                        <p class="mt-1 text-[11px] text-gray-400">This count has no per-object markers; open the sheet to check it by eye.</p>
+                      {/if}
+                    {/if}
+                    {#if c.markers_truncated}
+                      <p class="mt-1 text-[11px] text-gray-400">Only the first markers are shown.</p>
+                    {/if}
+                  </div>
+                {/if}
 
                 <p class="whitespace-pre-wrap leading-relaxed">{m.content}</p>
 
@@ -241,7 +351,7 @@
                         <button
                           class="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
                           title="Open this sheet"
-                          on:click={() => openSource(s)}
+                          on:click={() => openSource(s, m)}
                         >
                           {s.label}{s.sheet_title ? ` · ${s.sheet_title}` : ''}
                           {#if s.sheet_number}<span class="text-blue-400"> (p.{s.page_number})</span>{/if}
@@ -356,7 +466,8 @@
     {pages}
     pageNumber={viewer.page}
     evidence={viewer.evidence}
+    markers={viewer.markers}
     on:close={() => (viewer = null)}
-    on:navigate={(e) => (viewer = { page: e.detail, evidence: [] })}
+    on:navigate={(e) => (viewer = { page: e.detail, evidence: [], markers: viewer?.markers ?? [] })}
   />
 {/if}

@@ -1,12 +1,15 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { pageImageUrl } from '$lib/api';
-  import type { DrawingPage, Evidence } from '$lib/api';
+  import type { CountMarker, DrawingPage, Evidence } from '$lib/api';
 
   export let documentId: string;
   export let pages: DrawingPage[];
   export let pageNumber: number;
   export let evidence: Evidence[] = [];
+  /** Counted objects to outline on the sheet (all pages; the current page's are drawn). */
+  export let markers: CountMarker[] = [];
+  let showMarkers = true;
 
   const dispatch = createEventDispatcher<{ close: void; navigate: number }>();
 
@@ -17,6 +20,7 @@
 
   $: current = pages.find((p) => p.page_number === pageNumber);
   $: idx = pages.findIndex((p) => p.page_number === pageNumber);
+  $: pageMarkers = markers.filter((m) => m.page_number === pageNumber);
   // Reset view state whenever the page changes.
   $: pageNumber, ((imgError = false), (loaded = false), (zoom = 'fit'));
 
@@ -49,6 +53,14 @@
       <button class="btn-secondary text-xs" on:click={() => go(-1)} disabled={idx <= 0} aria-label="Previous page">‹ Prev</button>
       <button class="btn-secondary text-xs" on:click={() => go(1)} disabled={idx < 0 || idx >= pages.length - 1} aria-label="Next page">Next ›</button>
       <span class="mx-1 h-5 w-px bg-gray-200"></span>
+      {#if markers.length > 0}
+        <button
+          class="btn-secondary text-xs {showMarkers ? 'ring-2 ring-red-400' : ''}"
+          on:click={() => (showMarkers = !showMarkers)}
+          aria-pressed={showMarkers}
+          title="Outline each counted object on the sheet"
+        >Markers ({pageMarkers.length})</button>
+      {/if}
       {#each [['fit', 'Fit'], [1, '100%'], [2, '200%'], [3, '300%']] as [z, label]}
         <button class="btn-secondary text-xs {zoom === z ? 'ring-2 ring-blue-500' : ''}" on:click={() => (zoom = z as Zoom)}>{label}</button>
       {/each}
@@ -77,14 +89,39 @@
       {#if !loaded}
         <p class="text-center text-sm text-white">Loading page…</p>
       {/if}
-      <img
-        src={pageImageUrl(documentId, pageNumber)}
-        alt={`Drawing page ${pageNumber}`}
-        class="mx-auto bg-white shadow-xl {zoom === 'fit' ? 'max-h-full max-w-full object-contain' : ''}"
-        style={zoom === 'fit' ? '' : `width:${zoom * 100}%;max-width:none`}
-        on:load={() => (loaded = true)}
-        on:error={() => (imgError = true)}
-      />
+      <div
+        class="relative mx-auto w-fit bg-white shadow-xl"
+        style={zoom === 'fit' ? 'max-width:100%' : `width:${zoom * 100}%`}
+      >
+        <img
+          src={pageImageUrl(documentId, pageNumber)}
+          alt={`Drawing page ${pageNumber}`}
+          class="block"
+          style={zoom === 'fit'
+            ? 'max-width:100%;max-height:calc(100vh - 9rem);width:auto;height:auto'
+            : 'width:100%;height:auto'}
+          on:load={() => (loaded = true)}
+          on:error={() => (imgError = true)}
+        />
+        {#if loaded && showMarkers && pageMarkers.length > 0}
+          <svg
+            class="pointer-events-none absolute inset-0 h-full w-full"
+            viewBox="0 0 1 1"
+            preserveAspectRatio="none"
+            aria-label={`${pageMarkers.length} counted objects outlined`}
+          >
+            {#each pageMarkers as m}
+              <rect
+                x={m.x - 0.003} y={m.y - 0.003 * 1.5} width={m.w + 0.006} height={m.h + 0.009}
+                fill="rgba(239,68,68,0.12)" stroke="#dc2626" stroke-width="2"
+                vector-effect="non-scaling-stroke" rx="0.002"
+              >
+                {#if m.label}<title>{m.label}</title>{/if}
+              </rect>
+            {/each}
+          </svg>
+        {/if}
+      </div>
     {/if}
   </div>
 </div>

@@ -40,6 +40,28 @@ question -> (follow-up rewrite) -> retrieve top pages (BM25 over text + sheet me
 
 **Notes**: indexing runs in the API process after the request returns (progress is polled); a restart mid-index can be retried from the UI. Page images live in the configured storage backend, so on Render's ephemeral `/tmp` they are lost on redeploy (as is the PDF itself). Run tests with `pip install -r backend/requirements-dev.txt && pytest`.
 
+### Object counting (Phase 3)
+
+Ask "How many 2x4 lights?", "How many RTUs?", "How many diffusers?", "How many doors?", "How many toilets?". A counting question is detected and answered by a separate pipeline, not by the language model:
+
+1. The question is parsed into an object, optional sizes (`2x4`) and an optional area (`in BOH`).
+2. Candidate sheets are retrieved, then each is read from the PDF's own data: words with positions and vector shapes (`pdfplumber`).
+3. Evidence is collected, most reliable first: **tag labels** on the plan (`L1` x 8, `RTU-1`), a **legend symbol** matched against the plan's vector shapes, the schedule's **QTY column**, and the number of **schedule rows**. A vision-model estimate is used only if nothing in the PDF identifies the object but the sheets do mention it.
+4. The answer says how it was counted, shows a count per sheet, and **outlines every counted object on the sheet** ("View marked sheet").
+
+**How far to trust a number.** Status comes from agreement between independent methods, never from a model's say-so, and no status claims certainty:
+
+| Status | Meaning |
+|---|---|
+| Cross-checked | two or more methods agree and nothing is in doubt |
+| One source: verify | one method found it; nothing contradicts it |
+| Needs verification | methods disagree, an area filter ("in BOH") could not be applied, symbol sizes are mixed, sheets of different types disagree, tags are known to mean types not units (doors), or the number is a vision-model estimate |
+| Not counted | nothing countable was found (this does not prove there are none) |
+
+Things it deliberately does not do: a size you ask about (2x4) is never answered with a different size; the vision model is not asked to count an object the sheets never mention; plain circles and squares are refused as legend symbols because they cannot be told apart from anything else; numbered note bubbles are rejected.
+
+Limits: it counts what the legend or tags identify, so fixture types without a legend entry are not included (the answer says so); area filters need room boundaries, which are not read; scanned drawings without vector data fall back to the (flagged) vision estimate. `false_verified_rate` in the eval harness (`backend/evals/count_sample.py`) is the metric to watch: a count that is wrong but reported as cross-checked or single-source must never happen.
+
 ### Reliability (Phase 1)
 
 Beyond citing sources, answers are checked against the drawing text before they are shown:

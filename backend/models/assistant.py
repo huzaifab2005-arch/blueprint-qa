@@ -67,4 +67,6 @@ class ChatMessage(Base):
     sources: Mapped[list | None] = mapped_column(JSON, nullable=True)
     pages_searched: Mapped[list | None] = mapped_column(JSON, nullable=True)
     warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Structured result of an object-count answer (see schemas.assistant.CountResultRead).
+    count_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

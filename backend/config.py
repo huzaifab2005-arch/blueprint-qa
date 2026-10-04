@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     assistant_concurrency: int = 2
     # Extra attempts after a transient API error or unparseable model output.
     assistant_llm_retries: int = 2
+    # Object counting
+    count_max_pages: int = 10
+    # Ask the vision model for a (flagged, low-confidence) estimate when nothing in the
+    # PDF's text or vector data identifies the object.
+    count_vision_fallback: bool = True
 
     class Config:
         env_file = ".env"

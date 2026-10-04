@@ -107,9 +107,28 @@ async def get_db() -> AsyncSession:
         yield session
 
 
+# Columns added after a table first shipped. create_all() creates missing TABLES but
+# never alters existing ones, so a database created by an earlier version would
+# otherwise be missing these and fail on first insert.
+_ADDED_COLUMNS = (("chat_messages", "count_result", "JSON"),)
+
+
+def _ensure_columns(sync_conn) -> None:
+    from sqlalchemy import inspect
+
+    insp = inspect(sync_conn)
+    for table, column, ddl_type in _ADDED_COLUMNS:
+        if not insp.has_table(table):
+            continue
+        if column not in {c["name"] for c in insp.get_columns(table)}:
+            logger.warning("Adding missing column %s.%s", table, column)
+            sync_conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+
+
 async def create_tables():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_columns)
 
 
 async def check_connection() -> None:

@@ -26,6 +26,8 @@ Case format (cases.json = a list of objects):
 
 Headline metrics, full mode:
   false_answer_rate  negatives answered as if known (must be 0)
+  false_verified_rate  count answers that were wrong but reported as cross_checked or
+                     single_source (must be 0; counting cases carry "expected_count")
   answer_accuracy    positives answered correctly
   citation_accuracy  positives citing every expected sheet
   abstention_rate    negatives correctly declined
@@ -75,8 +77,34 @@ def score_retrieval(case: dict, retrieved_labels: list[str]) -> CaseResult | Non
     )
 
 
+def score_count(case: dict, answer: dict) -> CaseResult:
+    """Score an object-count answer. The failure that matters most is a count that is
+    wrong yet reported as cross_checked or single_source ("false verified")."""
+    cr = answer.get("count_result") or {}
+    qty, status = cr.get("quantity"), cr.get("status")
+    expected = case["expected_count"]
+    correct = qty == expected
+    verified_claim = status in ("cross_checked", "single_source")
+    allowed = status in case.get("expected_status", [status])
+    problems = []
+    if not correct:
+        problems.append(f"counted {qty}, expected {expected}")
+    if not allowed:
+        problems.append(f"status {status}, expected one of {case.get('expected_status')}")
+    false_verified = verified_claim and not correct
+    if false_verified:
+        problems.insert(0, "FALSE VERIFIED")
+    res = CaseResult(
+        case["id"], correct and allowed, "; ".join(problems), kind="count",
+        checks={"count": correct, "status": allowed, "false_verified": false_verified},
+    )
+    return res
+
+
 def score_answer(case: dict, answer: dict) -> CaseResult:
     """Score one API answer (an AskResponse['answer'] dict)."""
+    if "expected_count" in case:
+        return score_count(case, answer)
     content = answer.get("content", "")
     verified = bool(answer.get("verified"))
     cited = [s.get("label", "") for s in answer.get("sources", [])]
@@ -124,7 +152,12 @@ def summarise(results: list[CaseResult]) -> dict:
         "abstention_rate": rate([r.ok for r in neg]),
         "false_answer_rate": (rate([not r.ok for r in neg])),
     }
-    if not any("answer" in r.checks for r in pos):  # retrieval mode
+    counts = [r for r in results if r.kind == "count"]
+    if counts:
+        summary["count_accuracy"] = rate([r.checks["count"] for r in counts])
+        summary["count_status_ok"] = rate([r.checks["status"] for r in counts])
+        summary["false_verified_rate"] = rate([r.checks["false_verified"] for r in counts])
+    if not any("answer" in r.checks for r in pos) and pos:  # retrieval mode
         summary["retrieval_recall"] = rate([r.ok for r in pos])
     return summary
 
@@ -231,7 +264,8 @@ def main(argv: list[str] | None = None) -> int:
     if tmp:
         Path(tmp.name).unlink(missing_ok=True)
 
-    failed = summary["false_answer_rate"] not in (None, 0) or summary["passed"] < summary["cases"]
+    failed = (summary["false_answer_rate"] not in (None, 0) or summary.get("false_verified_rate") not in (None, 0)
+              or summary["passed"] < summary["cases"])
     return 1 if failed else 0
 
 

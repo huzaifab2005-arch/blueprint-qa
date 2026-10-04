@@ -89,6 +89,8 @@ class Answer:
     sources: list[dict]
     pages_searched: list[int]
     warnings: list[str]
+    # Set for object-count answers (see counting.count_answer.to_payload).
+    count_result: dict | None = None
 
 
 # ── Prompts ─────────────────────────────────────────────────────────────────

@@ -337,3 +337,102 @@ async def test_eval_harness_full_mode_against_inprocess_api(client, monkeypatch,
     assert [r.ok for r in results] == [True, True], [r.detail for r in results]
     s = run_eval.summarise(results)
     assert s["false_answer_rate"] == 0 and s["answer_accuracy"] == 1.0
+
+
+# ── Phase 3: object counting through the API ────────────────────────────────
+
+async def _upload_count_set(client, **kwargs):
+    from backend.evals.count_sample import build_count_pdf
+
+    r = await client.post("/api/documents/upload",
+                          files={"file": ("count.pdf", build_count_pdf(**kwargs), "application/pdf")})
+    assert r.status_code == 201, r.text
+    doc_id = r.json()["id"]
+    await client.post(f"/api/assistant/{doc_id}/index")
+    assert (await client.get(f"/api/assistant/{doc_id}/index")).json()["status"] == "ready"
+    return doc_id
+
+
+async def test_count_answer_is_cross_checked_with_markers_sources_and_persistence(client):
+    doc_id = await _upload_count_set(client)
+    r = await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "How many 2x4 lights?"})
+    assert r.status_code == 200, r.text
+    a = r.json()["answer"]
+    cr = a["count_result"]
+    assert cr["status"] == "cross_checked" and cr["quantity"] == 8 and cr["primary"] == "tag_instances"
+    assert {m["method"] for m in cr["methods"]} == {"tag_instances", "symbol", "schedule_qty"}
+    assert len(cr["markers"]) == 8 and all(0 <= m["x"] <= 1 and 0 <= m["y"] <= 1 for m in cr["markers"])
+    assert a["verified"] is True and a["confidence"] == "high"
+    assert [s["label"] for s in a["sources"]] == ["E2.01"] and a["sources"][0]["note"] == "8 counted"
+    assert a["content"].startswith("8 ") and "not guaranteed" not in a["content"]
+    assert any("not guaranteed" in w for w in a["warnings"])          # the standing disclaimer
+    assert not client.llm.calls                                       # no model call was needed
+
+    saved = [m for m in (await client.get(f"/api/assistant/{doc_id}/messages")).json() if m["role"] == "assistant"]
+    assert saved[0]["count_result"]["quantity"] == 8                  # survives a reload
+
+
+async def test_count_with_an_area_filter_is_not_called_verified(client):
+    doc_id = await _upload_count_set(client)
+    a = (await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "How many 2x4 lights in BOH?"})).json()["answer"]
+    assert a["count_result"]["status"] == "needs_verification" and a["verified"] is False
+    assert any("BOH" in b for b in a["count_result"]["blocking"])
+    assert "needs verification" in a["content"]
+
+
+async def test_count_not_found_and_disagreement(client):
+    doc_id = await _upload_count_set(client)
+    a = (await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "How many diffusers?"})).json()["answer"]
+    assert a["count_result"]["status"] == "not_found" and a["count_result"]["quantity"] is None and a["verified"] is False
+
+    bad = await _upload_count_set(client, schedule_qty_l1=9)
+    a = (await client.post(f"/api/assistant/{bad}/ask", json={"question": "How many 2x4 lights?"})).json()["answer"]
+    assert a["count_result"]["status"] == "needs_verification" and a["verified"] is False
+    assert any("disagree" in w for w in a["warnings"])
+
+
+async def test_non_count_questions_still_use_document_qa(client):
+    doc_id = await _upload_count_set(client)
+    a = (await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "Which page contains the lighting schedule?"})).json()["answer"]
+    assert a["count_result"] is None
+
+
+async def test_count_without_the_pdf_explains_instead_of_failing(client, tmp_path):
+    import shutil
+    doc_id = await _upload_count_set(client)
+    shutil.rmtree(tmp_path / "uploads", ignore_errors=True)            # ephemeral storage wiped
+    r = await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "How many 2x4 lights?"})
+    assert r.status_code == 200
+    a = r.json()["answer"]
+    assert a["verified"] is False and "original PDF" in a["content"]
+
+
+async def test_eval_scores_counts_and_flags_false_verified():
+    from backend.evals.run_eval import score_answer, summarise
+    case = {"id": "c", "question": "q", "expected_count": 8, "expected_status": ["cross_checked"]}
+    good = {"count_result": {"quantity": 8, "status": "cross_checked"}}
+    wrong_but_confident = {"count_result": {"quantity": 9, "status": "single_source"}}
+    wrong_and_flagged = {"count_result": {"quantity": 9, "status": "needs_verification"}}
+    assert score_answer(case, good).ok
+    r = score_answer(case, wrong_but_confident)
+    assert not r.ok and r.checks["false_verified"] and "FALSE VERIFIED" in r.detail
+    assert not score_answer(case, wrong_and_flagged).checks["false_verified"]   # wrong, but honestly flagged
+    s = summarise([score_answer(case, good), r])
+    assert s["false_verified_rate"] == 0.5 and s["count_accuracy"] == 0.5
+
+
+async def test_existing_chat_table_gets_the_new_column():
+    """create_all never alters an existing table: a database created before this feature
+    must be upgraded in place, not fail on its first insert."""
+    from sqlalchemy import inspect, text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from backend.database import _ensure_columns
+
+    engine = create_async_engine("sqlite+aiosqlite://")
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE TABLE chat_messages (id INTEGER PRIMARY KEY, content TEXT)"))
+        await conn.run_sync(_ensure_columns)
+        cols = await conn.run_sync(lambda c: {col["name"] for col in inspect(c).get_columns("chat_messages")})
+        await conn.run_sync(_ensure_columns)                        # idempotent
+    assert "count_result" in cols
+    await engine.dispose()
