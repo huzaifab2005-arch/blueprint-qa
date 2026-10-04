@@ -47,7 +47,14 @@ def _downlight(c, x, y, r=6):
     c.line(x, y - r - 2, x, y + r + 2)
 
 
-def _lighting_plan(c, w, h, l1_on_plan):
+def _pendant(c, x, y):
+    """A downlight's circle and crosshair plus an inner circle: a superset of the
+    downlight symbol, so a naive matcher counts pendants as downlights."""
+    _downlight(c, x, y, r=6)
+    c.circle(x, y, 2.5)
+
+
+def _lighting_plan(c, w, h, l1_on_plan, pendants=0):
     """E2.01 drawn in a w x h frame (y up). Positions are relative to the frame, so the
     same sheet can be authored upright (portrait) or landscape for a rotated page."""
     base = h - 520
@@ -71,10 +78,17 @@ def _lighting_plan(c, w, h, l1_on_plan):
     _downlight(c, 72, base - 190)
     c.setFont("Helvetica", 11)
     c.drawString(100, base - 192, "6\" DOWNLIGHT:")
+    for i in range(pendants):
+        _pendant(c, 400 + i * 60, base - 30)
+    if pendants:
+        _pendant(c, 72, base - 230)
+        c.setFont("Helvetica", 11)
+        c.drawString(100, base - 232, "PENDANT LIGHT:")
     _title_block(c, "LIGHTING PLAN", "E2.01")
 
 
-def build_count_pdf(*, schedule_qty_l1: int = 8, l1_on_plan: int = 8, rotate_first: int = 0) -> bytes:
+def build_count_pdf(*, schedule_qty_l1: int = 8, l1_on_plan: int = 8, rotate_first: int = 0,
+                    pendants: int = 0) -> bytes:
     """rotate_first=270 stores page 1 as a portrait page with /Rotate 270 whose content
     is authored to display upright in landscape, as CAD exports of landscape sheets do."""
     from reportlab.pdfgen import canvas
@@ -86,10 +100,10 @@ def build_count_pdf(*, schedule_qty_l1: int = 8, l1_on_plan: int = 8, rotate_fir
     if rotate_first == 270:
         c.saveState()
         c.transform(0, -1, 1, 0, 0, PAGE[1])      # displayed (x', y') -> raw (y', H - x')
-        _lighting_plan(c, PAGE[1], PAGE[0], l1_on_plan)
+        _lighting_plan(c, PAGE[1], PAGE[0], l1_on_plan, pendants)
         c.restoreState()
     else:
-        _lighting_plan(c, PAGE[0], PAGE[1], l1_on_plan)
+        _lighting_plan(c, PAGE[0], PAGE[1], l1_on_plan, pendants)
     c.showPage()
 
     # E6.01 LIGHTING SCHEDULE

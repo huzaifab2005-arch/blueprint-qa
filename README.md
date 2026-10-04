@@ -62,6 +62,25 @@ Things it deliberately does not do: a size you ask about (2x4) is never answered
 
 Limits: it counts what the legend or tags identify, so fixture types without a legend entry are not included (the answer says so); area filters need room boundaries, which are not read; scanned drawings without vector data fall back to the (flagged) vision estimate. `false_verified_rate` in the eval harness (`backend/evals/count_sample.py`) is the metric to watch: a count that is wrong but reported as cross-checked or single-source must never happen.
 
+### Running against the real NVIDIA API
+
+Question answering and the counting fallback call a hosted vision model; everything else (indexing, retrieval, counting from tags/legends/schedules) runs without it. To evaluate the full pipeline with a real key:
+
+1. **Provide the key as an environment variable** (`NVIDIA_API_KEY`), never in code, a commit or a chat message. In a cloud environment, add it under the environment's settings and start a new session.
+2. **Allow the host.** If outbound network access is restricted, allow `integrate.api.nvidia.com` (the host in `LLM_BASE_URL`).
+3. `pip install -r backend/requirements-dev.txt`
+4. **Preflight**: `python -m backend.evals.preflight`. It checks the key, reachability, that the model is offered, JSON mode, that the model really *reads* an attached image, and that a page-sized image (hundreds of KB) is accepted. A failed "large" check means the endpoint caps inline image size: set `ASSISTANT_MODEL_IMAGE_MAX_BYTES=170000` (the app also retries once with a smaller image on its own).
+5. **Full evaluation, no server or Postgres needed:**
+   ```bash
+   python -m backend.evals.run_eval --pdf your_set.pdf --cases backend/evals/cases/real_set_qa.json \
+       --mode full --inprocess --show-answers --report qa_report.json
+   python -m backend.evals.run_eval --pdf your_set.pdf --cases backend/evals/cases/real_set_count.json \
+       --mode full --inprocess --show-answers
+   ```
+   The preflight runs first and the evaluation is skipped if it fails. Watch `false_answer_rate` and `false_verified_rate`: both must be 0.
+
+Counting questions do not need a key at all, so the counting half can be run with step 5's second command on its own.
+
 ### Reliability (Phase 1)
 
 Beyond citing sources, answers are checked against the drawing text before they are shown:

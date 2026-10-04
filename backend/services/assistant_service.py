@@ -14,6 +14,8 @@ Grounding rules enforced here, not just requested in the prompt:
   * evidence quotes are checked against the page's extracted text and flagged.
 """
 import asyncio
+import base64
+import io
 import json
 import logging
 import re
@@ -242,20 +244,72 @@ def _text_model() -> str:
     return settings.llm_text_model or settings.llm_vision_model
 
 
-def _load_model_image_b64(image_path: str | None) -> str | None:
-    """Blocking: read the stored page image and shrink it for the model."""
+def _fit_b64(img, limit: int) -> str:
+    """JPEG-encode `img` as base64 no larger than `limit` bytes if at all possible, by
+    lowering quality, then size. Returns the smallest attempt if none fits."""
+    from PIL import Image
+
+    b64 = ""
+    for quality, scale in ((80, 1.0), (70, 0.85), (60, 0.7), (50, 0.55), (45, 0.45)):
+        im = img if scale == 1.0 else img.resize(
+            (max(int(img.width * scale), 64), max(int(img.height * scale), 64)), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=quality, optimize=True)
+        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        if len(b64) <= limit:
+            break
+    return b64
+
+
+def _load_model_image_b64(image_path: str | None, max_b64_bytes: int | None = None) -> str | None:
+    """Blocking: read the stored page image and shrink it for the model. With
+    `max_b64_bytes`, also compress until the encoded image fits."""
     if not image_path:
         return None
     try:
         from PIL import Image
-        import io
         data = get_storage().read_bytes(image_path)
         img = Image.open(io.BytesIO(data)).convert("RGB")
         img.thumbnail((settings.assistant_model_image_px,) * 2)
+        if max_b64_bytes:
+            return _fit_b64(img, max_b64_bytes)
         return _image_to_base64(img)
     except Exception as exc:
         logger.warning("Could not load page image %s: %s", image_path, exc)
         return None
+
+
+# Some hosted vision endpoints reject large inline images (HTTP 400/413/422). When one
+# does, the call is retried once with an image squeezed under this size.
+RETRY_IMAGE_B64_BYTES = 170_000
+
+
+async def vision_json(
+    text: str, image_path: str | None, *, system: str | None = None, max_tokens: int = 1200
+) -> dict | None:
+    """One JSON completion over a page image, with a smaller-image retry if the
+    endpoint rejects the first request as invalid or too large."""
+    configured = settings.assistant_model_image_max_bytes or None
+    last_exc: Exception | None = None
+    for limit in dict.fromkeys((configured, RETRY_IMAGE_B64_BYTES)):
+        if limit is None:
+            image_b64 = await asyncio.to_thread(_load_model_image_b64, image_path)
+        else:
+            image_b64 = await asyncio.to_thread(_load_model_image_b64, image_path, limit)
+        content: list[dict] = [{"type": "text", "text": text}]
+        if image_b64:
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}})
+        messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": content}]
+        try:
+            return await _chat_json(settings.llm_vision_model, messages, max_tokens)
+        except openai.APIStatusError as exc:
+            if not image_b64 or exc.status_code not in (400, 413, 422):
+                raise
+            logger.warning("Vision request rejected (%s) with a %d KB image; retrying smaller: %s",
+                           exc.status_code, len(image_b64) // 1000, exc)
+            last_exc = exc
+    assert last_exc is not None
+    raise last_exc
 
 
 # ── Steps ───────────────────────────────────────────────────────────────────
@@ -299,15 +353,7 @@ async def analyze_page_for_question(page: DocumentPage, question: str) -> PageFi
             question=question,
             text=text or "(no text could be extracted from this sheet)",
         )
-        content: list[dict] = [{"type": "text", "text": prompt}]
-        image_b64 = await asyncio.to_thread(_load_model_image_b64, page.image_path)
-        if image_b64:
-            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}})
-
-        data = await _chat_json(
-            settings.llm_vision_model,
-            [{"role": "system", "content": PAGE_SYSTEM}, {"role": "user", "content": content}],
-        )
+        data = await vision_json(prompt, page.image_path, system=PAGE_SYSTEM)
     except Exception as exc:
         logger.error("Page %s analysis failed: %s", page.page_number, exc)
         finding.error = f"{type(exc).__name__}: {exc}"

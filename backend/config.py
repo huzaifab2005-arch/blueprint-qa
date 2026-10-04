@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     assistant_max_page_chars: int = 12000
     # Longest side, in pixels, of the image sent to the vision model per page.
     assistant_model_image_px: int = 1600
+    # Cap on the base64 size of an image sent to the model; 0 = no cap. If the endpoint
+    # rejects large inline images, a request is retried once under ~170 KB anyway;
+    # set this (e.g. 170000) to skip the failed first attempt.
+    assistant_model_image_max_bytes: int = 0
     # Longest side of the stored page image shown in the viewer and used for OCR.
     assistant_page_image_px: int = 3600
     # Pages whose embedded text layer is shorter than this are OCR'd instead.

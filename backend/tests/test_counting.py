@@ -284,3 +284,15 @@ def test_vision_is_not_asked_to_count_something_the_sheets_never_mention(tmp_pat
         out = asyncio.run(count_objects(q, parse_count_question(q), metas, str(pdf)))
         assert out.status == C.NOT_FOUND and out.quantity is None
     assert not calls
+
+
+def test_a_superset_symbol_is_not_counted_as_the_simpler_one_even_when_not_asked_about(tmp_path):
+    """Pendants contain the downlight symbol. Asking only about downlights must not
+    count the pendants or the pendant's own legend swatch (found on a real set: 'recessed
+    fixtures' returned 20 instead of 17 until every legend entry took part in the matching)."""
+    pdf = build_count_pdf(pendants=2)
+    out = _run(pdf, tmp_path, "How many downlights?")
+    symbol = next(m for m in out.methods if m.method == "symbol")
+    assert symbol.quantity == 3, symbol.detail
+    pend = _run(pdf, tmp_path, "How many pendant lights?")
+    assert next(m for m in pend.methods if m.method == "symbol").quantity == 2

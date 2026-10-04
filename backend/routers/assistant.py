@@ -142,9 +142,6 @@ async def ask(document_id: uuid.UUID, body: AskRequest, db: AsyncSession = Depen
             status_code=409,
             detail="This document is not indexed yet. Start indexing and wait for it to finish.",
         )
-    if not settings.nvidia_api_key:
-        raise HTTPException(status_code=503, detail="NVIDIA_API_KEY is not configured on the server.")
-
     question = body.question.strip()
     history = list(reversed((await db.execute(
         select(ChatMessage)
@@ -154,6 +151,10 @@ async def ask(document_id: uuid.UUID, body: AskRequest, db: AsyncSession = Depen
     )).scalars().all()))
 
     parsed = parse_count_question(question) if is_count_question(question) else None
+    # Counting reads the PDF directly and works without a key (its optional vision
+    # estimate checks for one itself); only the language-model path requires it.
+    if parsed is None and not settings.nvidia_api_key:
+        raise HTTPException(status_code=503, detail="NVIDIA_API_KEY is not configured on the server.")
     try:
         if parsed is not None:
             pages = list((await db.execute(

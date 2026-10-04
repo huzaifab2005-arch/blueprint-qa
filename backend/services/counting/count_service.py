@@ -219,6 +219,11 @@ def _merge_sheets(
     return kept, len(keep) > 1, blocking, warnings
 
 
+def _template_key(t) -> tuple:
+    """Identity of a legend entry on its page: where its swatch is."""
+    return (t.page_number, round(t.legend_box[0]), round(t.legend_box[1]))
+
+
 def _marker(geom: PageGeometry, box, label: str) -> Marker:
     x, y, w, h = geom.norm_box(*box)
     return Marker(geom.page_number, round(x, 5), round(y, 5), round(w, 5), round(h, 5), label)
@@ -269,11 +274,23 @@ def collect_evidence(
         # were not counted". Elsewhere they are just prose that mentions the object.
         if templates:
             ev.legend_notes.extend(notes)
-        if templates:
-            ev.legend_pages[n] = [t.label for t in templates]
-            exclude = {id(m) for t in templates for m in t.members}
-            counts = [count_template(geom, t, exclude) for t in templates]
+            # Resolve against EVERY legend entry on the sheet, not just the ones asked
+            # about: a potlight symbol is a sub-shape of a pendant, and another entry's
+            # own swatch must never count as an instance. Only then keep the asked-for ones.
+            # (A legend heading is a phrase; a short label beside a plan symbol, like "B2",
+            # is not, or the plan's own fixtures would be taken for legend swatches.)
+            everything, _ = find_legend_templates(
+                geom, lambda t: len(re.sub(r"[^A-Za-z]", "", t)) >= 8 and not t.rstrip().endswith("."))
+            asked = {_template_key(t) for t in templates}
+            by_key = {_template_key(t): t for t in everything}
+            for t in templates:
+                by_key.setdefault(_template_key(t), t)
+            all_templates = list(by_key.values())
+            exclude = {id(m) for t in all_templates for m in t.members}
+            counts = [count_template(geom, t, exclude) for t in all_templates]
             resolve_conflicts(counts)
+            counts = [c for c in counts if _template_key(c.template) in asked]
+            ev.legend_pages[n] = [t.label for t in templates]
             for c in counts:
                 if looks_like_callout_bubbles(geom, c.instances):
                     ev.legend_notes.append(
@@ -454,20 +471,12 @@ async def vision_estimate(
     per_page: dict[int, int] = {}
     notes: list[str] = []
     for meta in metas:
-        image_b64 = await asyncio.to_thread(A._load_model_image_b64, meta.image_path)
-        if not image_b64:
+        if not meta.image_path:
             continue
         prompt = VISION_PROMPT.format(what=what, label=meta.label,
                                       legend=(f"The legend describes it as: {legend_hint}\n\n" if legend_hint else ""))
         try:
-            data = await A._chat_json(
-                settings.llm_vision_model,
-                [{"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                ]}],
-                max_tokens=300,
-            )
+            data = await A.vision_json(prompt, meta.image_path, max_tokens=300)
         except Exception as exc:
             logger.warning("Vision count failed on page %s: %s", meta.page_number, exc)
             continue

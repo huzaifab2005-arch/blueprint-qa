@@ -1,0 +1,62 @@
+[
+ {
+  "id": "cnt-2x2-lights",
+  "question": "How many 2x2 lights?",
+  "expected_count": 13,
+  "expected_status": [
+   "single_source",
+   "cross_checked"
+  ]
+ },
+ {
+  "id": "cnt-recessed",
+  "question": "How many recessed fixtures?",
+  "expected_count": 17,
+  "expected_status": [
+   "single_source",
+   "cross_checked"
+  ]
+ },
+ {
+  "id": "cnt-pendant",
+  "question": "How many pendant lights?",
+  "expected_count": 2,
+  "expected_status": [
+   "single_source",
+   "cross_checked"
+  ]
+ },
+ {
+  "id": "cnt-2x4-absent",
+  "question": "How many 2x4 lights?",
+  "expected_count": null,
+  "expected_status": [
+   "not_found"
+  ]
+ },
+ {
+  "id": "cnt-rtu-absent",
+  "question": "How many RTUs?",
+  "expected_count": null,
+  "expected_status": [
+   "not_found"
+  ]
+ },
+ {
+  "id": "cnt-diffuser-absent",
+  "question": "How many diffusers?",
+  "expected_count": null,
+  "expected_status": [
+   "not_found"
+  ]
+ },
+ {
+  "id": "cnt-toilet",
+  "question": "How many toilets?",
+  "expected_count": 1,
+  "expected_status": [
+   "needs_verification",
+   "not_found"
+  ]
+ }
+]

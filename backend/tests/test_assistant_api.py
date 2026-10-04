@@ -436,3 +436,56 @@ async def test_existing_chat_table_gets_the_new_column():
         await conn.run_sync(_ensure_columns)                        # idempotent
     assert "count_result" in cols
     await engine.dispose()
+
+
+# ── Real-endpoint robustness: large inline images ───────────────────────────
+
+def test_fit_b64_squeezes_a_noisy_image_under_the_limit():
+    import base64, io, os
+    from PIL import Image
+    img = Image.frombytes("RGB", (1600, 1035), os.urandom(1600 * 1035 * 3))   # worst case for JPEG
+    big = assistant_service._fit_b64(img, 10_000_000)
+    small = assistant_service._fit_b64(img, 170_000)
+    assert len(small) < len(big) and len(small) <= 170_000
+    assert Image.open(io.BytesIO(base64.b64decode(small))).size[0] >= 64        # still a decodable JPEG
+
+
+async def test_vision_json_retries_smaller_when_the_endpoint_rejects_the_image(client, monkeypatch, tmp_path):
+    import io
+    import httpx
+    import openai
+    from PIL import Image
+
+    path = tmp_path / "uploads" / "p.jpg"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (2000, 1300), "white").save(path, format="JPEG")
+    sizes = []
+
+    async def fake(model, messages, max_tokens=1200):
+        url = messages[-1]["content"][1]["image_url"]["url"]
+        sizes.append(len(url))
+        if len(sizes) == 1:
+            req = httpx.Request("POST", "http://x")
+            raise openai.BadRequestError("image too large", response=httpx.Response(400, request=req), body=None)
+        return {"ok": True}
+    monkeypatch.setattr(assistant_service, "_chat_json", fake)
+    monkeypatch.setattr(assistant_service.settings, "assistant_model_image_px", 1600)
+
+    assert await assistant_service.vision_json("q", str(path)) == {"ok": True}
+    assert len(sizes) == 2 and sizes[1] <= assistant_service.RETRY_IMAGE_B64_BYTES + 100
+
+    # A non-size error (auth) is not retried with a smaller image: it is raised.
+    async def unauthorized(model, messages, max_tokens=1200):
+        raise openai.AuthenticationError("bad key", response=httpx.Response(401, request=httpx.Request("POST", "http://x")), body=None)
+    monkeypatch.setattr(assistant_service, "_chat_json", unauthorized)
+    with pytest.raises(openai.AuthenticationError):
+        await assistant_service.vision_json("q", str(path))
+
+
+async def test_counting_works_without_an_api_key_but_language_answers_do_not(client, monkeypatch):
+    doc_id = await _upload_count_set(client)
+    monkeypatch.setattr(get_settings(), "nvidia_api_key", "")
+    ok = await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "How many 2x4 lights?"})
+    assert ok.status_code == 200 and ok.json()["answer"]["count_result"]["quantity"] == 8
+    qa = await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "Which page has the lighting schedule?"})
+    assert qa.status_code == 503 and "NVIDIA_API_KEY" in qa.json()["detail"]

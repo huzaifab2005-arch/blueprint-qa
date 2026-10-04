@@ -1,0 +1,167 @@
+[
+ {
+  "id": "boh-lights",
+  "question": "What model are the BOH lights?",
+  "expected_sheets": [
+   "1.3"
+  ],
+  "must_include": [
+   "PANELF-1A-032"
+  ]
+ },
+ {
+  "id": "boh-ceiling-typo",
+  "question": "what is the ceiling hieght in BOH?",
+  "expected_sheets": [
+   "1.3"
+  ],
+  "must_include": [
+   "10'-8"
+  ]
+ },
+ {
+  "id": "ceiling-height",
+  "question": "What is the ceiling height?",
+  "expected_sheets": [
+   "1.3"
+  ],
+  "must_include": [
+   "10'-8"
+  ]
+ },
+ {
+  "id": "washroom-ceiling",
+  "question": "What is the washroom ceiling height?",
+  "expected_sheets": [
+   "1.3"
+  ],
+  "must_include": [
+   "8'-6"
+  ]
+ },
+ {
+  "id": "washroom-dims",
+  "question": "what are the dimensions for the washroom",
+  "expected_sheets": [
+   "4.0"
+  ],
+  "must_include": [
+   "10'-3",
+   "6'-6"
+  ]
+ },
+ {
+  "id": "fixture-list",
+  "question": "give me the list of all items in the fixture list",
+  "expected_sheets": [
+   "1.1a",
+   "1.1b"
+  ]
+ },
+ {
+  "id": "mop-sink",
+  "question": "What model is the mop sink?",
+  "expected_sheets": [
+   "1.1a"
+  ],
+  "must_include": [
+   "MSB-2424"
+  ]
+ },
+ {
+  "id": "baby-table",
+  "question": "What model is the baby change table?",
+  "expected_sheets": [
+   "1.1a"
+  ],
+  "must_include": [
+   "KB200"
+  ]
+ },
+ {
+  "id": "freezer-size",
+  "question": "What size is the walk-in freezer?",
+  "expected_sheets": [
+   "1.1b"
+  ],
+  "must_include": [
+   "7'",
+   "8'"
+  ]
+ },
+ {
+  "id": "freezer-power",
+  "question": "What electrical does the walk-in freezer need?",
+  "expected_sheets": [
+   "1.1b"
+  ],
+  "must_include": [
+   "208"
+  ]
+ },
+ {
+  "id": "detail-ref",
+  "question": "What does detail 1/1.3 show?",
+  "expected_sheets": [
+   "1.3"
+  ],
+  "must_include": [
+   "TRIM"
+  ]
+ },
+ {
+  "id": "finish-schedule",
+  "question": "Which sheet has the finishes schedule?",
+  "expected_sheets": [
+   "1.4b"
+  ],
+  "must_include": [
+   "1.4b"
+  ]
+ },
+ {
+  "id": "electrical-plan",
+  "question": "Which page has the electrical plan?",
+  "expected_sheets": [
+   "1.6"
+  ],
+  "must_include": [
+   "1.6"
+  ]
+ },
+ {
+  "id": "door-type",
+  "question": "What size is door type 1?",
+  "expected_sheets": [
+   "1.2"
+  ],
+  "must_include": [
+   "3'-2"
+  ]
+ },
+ {
+  "id": "grab-bar",
+  "question": "What model is the grab bar behind the toilet?",
+  "expected_sheets": [
+   "1.1a"
+  ],
+  "must_include": [
+   "B-6806"
+  ]
+ },
+ {
+  "id": "track-light",
+  "question": "What model are the track lights?",
+  "expected_sheets": [
+   "1.3"
+  ],
+  "must_include": [
+   "T6BST"
+  ]
+ },
+ {
+  "id": "neg-chiller",
+  "question": "What model is the chiller?",
+  "expect_unverified": true
+ }
+]

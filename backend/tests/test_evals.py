@@ -87,3 +87,20 @@ def test_numeric_titleblock_set_end_to_end(tmp_path):
     ]
     results = run_eval.run_retrieval(str(pdf), NUMERIC_CASES, top_k=2)
     assert all(r.ok for r in results), [(r.id, r.detail) for r in results]
+
+
+def test_inprocess_runner_scores_the_counting_fixture_end_to_end(tmp_path, monkeypatch):
+    """upload -> index -> ask -> score through the real app on a throwaway SQLite DB.
+    Counting needs no LLM, so this exercises the same harness a live run uses."""
+    import asyncio
+
+    from backend.evals.count_sample import COUNT_CASES, build_count_pdf
+
+    monkeypatch.setattr(get_settings(), "upload_dir", get_settings().upload_dir)   # restored afterwards
+    pdf = tmp_path / "c.pdf"
+    pdf.write_bytes(build_count_pdf())
+    results = asyncio.run(run_eval.run_inprocess(str(pdf), COUNT_CASES))
+    assert all(r.ok for r in results), [(r.id, r.detail) for r in results]
+    summary = run_eval.summarise(results)
+    assert summary["false_verified_rate"] == 0 and summary["count_accuracy"] == 1.0
+    assert any(r.status == "cross_checked" and r.answer for r in results)      # answers are kept for reading

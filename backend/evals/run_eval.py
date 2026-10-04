@@ -15,6 +15,7 @@ Usage (from the repo root):
   python -m backend.evals.run_eval --sample
   python -m backend.evals.run_eval --pdf set.pdf --cases cases.json
   python -m backend.evals.run_eval --sample --mode full --api http://localhost:8000
+  python -m backend.evals.run_eval --pdf set.pdf --cases cases.json --mode full --inprocess --show-answers
 
 Case format (cases.json = a list of objects):
   {"id": "rtu1-model",
@@ -56,8 +57,10 @@ class CaseResult:
     id: str
     ok: bool
     detail: str = ""
-    kind: str = "positive"  # positive | negative
+    kind: str = "positive"  # positive | negative | count
     checks: dict[str, bool] = field(default_factory=dict)
+    answer: str = ""        # the answer text, so a live run can be read, not just scored
+    status: str = ""        # count answers: cross_checked | single_source | ...
 
 
 def _norm_sheet(s: str) -> str:
@@ -97,6 +100,7 @@ def score_count(case: dict, answer: dict) -> CaseResult:
     res = CaseResult(
         case["id"], correct and allowed, "; ".join(problems), kind="count",
         checks={"count": correct, "status": allowed, "false_verified": false_verified},
+        answer=answer.get("content", ""), status=str(status),
     )
     return res
 
@@ -114,7 +118,7 @@ def score_answer(case: dict, answer: dict) -> CaseResult:
         return CaseResult(
             case["id"], declined,
             "" if declined else f"FALSE ANSWER: {content[:160]!r}",
-            kind="negative", checks={"abstained": declined},
+            kind="negative", checks={"abstained": declined}, answer=content,
         )
 
     text = alnum(content)
@@ -134,7 +138,7 @@ def score_answer(case: dict, answer: dict) -> CaseResult:
     return CaseResult(
         case["id"], correct and cites,
         "; ".join(problems) + (f" | answer: {content[:120]!r}" if problems else ""),
-        checks={"answer": correct, "citation": cites},
+        checks={"answer": correct, "citation": cites}, answer=content,
     )
 
 
@@ -224,6 +228,42 @@ async def run_full(pdf_path: str, cases: list[dict], api: str, transport=None) -
     return results
 
 
+async def run_inprocess(pdf_path: str, cases: list[dict]) -> list[CaseResult]:
+    """Run the full pipeline against the app inside this process, on a throwaway SQLite
+    database and upload directory. Needs only the key (and network to the LLM): no
+    Postgres, no separate server. Requires `pip install -r backend/requirements-dev.txt`."""
+    import tempfile
+
+    import httpx
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from backend.config import get_settings
+    from backend.database import Base, get_db
+    from backend.main import app
+    from backend.services import indexing_service
+
+    tmp = tempfile.mkdtemp(prefix="bpqa-eval-")
+    get_settings().upload_dir = f"{tmp}/uploads"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp}/eval.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def override_get_db():
+        async with session() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    original = indexing_service.AsyncSessionLocal
+    indexing_service.AsyncSessionLocal = session
+    try:
+        return await run_full(pdf_path, cases, "http://eval", transport=httpx.ASGITransport(app=app))
+    finally:
+        indexing_service.AsyncSessionLocal = original
+        app.dependency_overrides.pop(get_db, None)
+        await engine.dispose()
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
@@ -235,6 +275,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--api", default="http://localhost:8000")
     ap.add_argument("--top-k", type=int, default=None, help="default: ASSISTANT_TOP_K")
     ap.add_argument("--json", action="store_true", help="print the summary as JSON")
+    ap.add_argument("--inprocess", action="store_true",
+                    help="full mode: run the app in this process on a temporary SQLite database (no server needed)")
+    ap.add_argument("--show-answers", action="store_true", help="print each answer, not just pass/fail")
+    ap.add_argument("--report", help="write per-case results and the summary to this JSON file")
+    ap.add_argument("--skip-preflight", action="store_true", help="full mode: do not check the LLM endpoint first")
     args = ap.parse_args(argv)
     if args.top_k is None:
         from backend.config import get_settings
@@ -255,11 +300,30 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "retrieval":
         results = run_retrieval(pdf, cases, args.top_k)
     else:
-        results = asyncio.run(run_full(pdf, cases, args.api))
+        if not args.skip_preflight:
+            from backend.evals.preflight import run_checks
+
+            checks = asyncio.run(run_checks())
+            for name, status, detail in checks:
+                print(f"preflight {status:4} {name}: {detail}")
+            if any(c[1] == "FAIL" for c in checks):
+                print("\nPreflight failed; not running the evaluation. Fix the above, or pass --skip-preflight.")
+                return 2
+            print()
+        results = asyncio.run(run_inprocess(pdf, cases) if args.inprocess else run_full(pdf, cases, args.api))
 
     summary = summarise(results)
     for r in results:
-        print(f"{'PASS' if r.ok else 'FAIL'}  {r.id}" + (f"  - {r.detail}" if r.detail else ""))
+        tag = f" [{r.status}]" if r.status else ""
+        print(f"{'PASS' if r.ok else 'FAIL'}  {r.id}{tag}" + (f"  - {r.detail}" if r.detail else ""))
+        if args.show_answers and r.answer:
+            print("      " + r.answer.replace("\n", "\n      ")[:500])
+    if args.report:
+        Path(args.report).write_text(json.dumps({
+            "summary": summary,
+            "results": [{"id": r.id, "ok": r.ok, "kind": r.kind, "status": r.status, "detail": r.detail,
+                         "answer": r.answer} for r in results],
+        }, indent=2))
     print(json.dumps(summary) if args.json else "\n" + "\n".join(f"{k}: {v}" for k, v in summary.items()))
     if tmp:
         Path(tmp.name).unlink(missing_ok=True)
