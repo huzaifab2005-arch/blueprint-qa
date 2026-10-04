@@ -18,6 +18,21 @@ class Settings(BaseSettings):
     azure_connection_string: str = ""
     azure_container_name: str = "blueprintqa"
 
+    # Drawing assistant (retrieval + conversational Q&A)
+    # Empty means "use llm_vision_model" for the text-only synthesis step.
+    llm_text_model: str = ""
+    assistant_max_index_pages: int = 150
+    assistant_top_k: int = 4
+    assistant_max_page_chars: int = 12000
+    # Longest side, in pixels, of the image sent to the vision model per page.
+    assistant_model_image_px: int = 1600
+    # Longest side of the stored page image shown in the viewer and used for OCR.
+    assistant_page_image_px: int = 3600
+    # Pages whose embedded text layer is shorter than this are OCR'd instead.
+    assistant_text_layer_min_chars: int = 80
+    assistant_history_messages: int = 6
+    assistant_concurrency: int = 2
+
     class Config:
         env_file = ".env"
 

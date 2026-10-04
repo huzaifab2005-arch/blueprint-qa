@@ -23,6 +23,18 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  backend-tests:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - run: pip install -r backend/requirements-dev.txt
+      - run: python -m pytest -q
+
   backend-smoke:
     # The build-only CI that preceded this shipped a broken deploy: `docker build`
     # succeeded while every DB-backed route returned 500, because `sqlalchemy` was

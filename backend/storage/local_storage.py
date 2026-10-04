@@ -18,6 +18,15 @@ class LocalStorage:
                 await f.write(chunk)
         return str(dest)
 
+    def save_bytes(self, data: bytes, key: str) -> str:
+        dest = self.upload_dir / key
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return str(dest)
+
+    def read_bytes(self, file_path: str) -> bytes:
+        return Path(file_path).read_bytes()
+
     def get_path(self, file_path: str) -> str:
         return file_path
 

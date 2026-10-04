@@ -30,6 +30,15 @@ class AzureStorage:
         blob_client.upload_blob(io.BytesIO(data), overwrite=True)
         return filename  # blob key
 
+    def save_bytes(self, data: bytes, key: str) -> str:
+        blob_client = self._client.get_blob_client(container=self._container, blob=key)
+        blob_client.upload_blob(io.BytesIO(data), overwrite=True)
+        return key
+
+    def read_bytes(self, file_path: str) -> bytes:
+        blob_client = self._client.get_blob_client(container=self._container, blob=file_path)
+        return blob_client.download_blob().readall()
+
     def get_path(self, file_path: str) -> str:
         blob_client = self._client.get_blob_client(container=self._container, blob=file_path)
         stream = blob_client.download_blob()

@@ -10,6 +10,7 @@ from backend.models.issue import Issue
 from backend.schemas.document import DocumentRead, DocumentList
 from backend.storage import get_storage
 from backend.config import get_settings
+from backend.services.indexing_service import delete_page_images
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 settings = get_settings()
@@ -128,6 +129,7 @@ async def delete_document(document_id: uuid.UUID, db: AsyncSession = Depends(get
     if not document:
         raise HTTPException(status_code=404, detail="Document not found.")
 
+    await delete_page_images(db, document_id)
     storage = get_storage()
     storage.delete(document.file_path)
 

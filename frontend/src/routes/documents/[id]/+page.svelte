@@ -5,6 +5,9 @@
   import { runAnalysis, getDocument, getIssues, getIssueSummary, exportIssuesToCsv } from '$lib/api';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import IssueList from '$lib/components/IssueList.svelte';
+  import Assistant from '$lib/components/Assistant.svelte';
+
+  let tab: 'qa' | 'assistant' = 'qa';
 
   let document: Document | null = null;
   let issues: Issue[] = [];
@@ -153,6 +156,25 @@
     </div>
   </div>
 
+  <!-- Tabs -->
+  <div class="flex gap-1 border-b border-gray-200" role="tablist">
+    <button
+      role="tab" aria-selected={tab === 'qa'}
+      class="-mb-px border-b-2 px-4 py-2 text-sm font-medium {tab === 'qa' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'}"
+      on:click={() => (tab = 'qa')}
+    >QA Report</button>
+    <button
+      role="tab" aria-selected={tab === 'assistant'}
+      class="-mb-px border-b-2 px-4 py-2 text-sm font-medium {tab === 'assistant' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'}"
+      on:click={() => (tab = 'assistant')}
+    >Drawing Assistant</button>
+  </div>
+
+  {#if tab === 'assistant'}
+    <Assistant documentId={document.id} />
+  {/if}
+
+  {#if tab === 'qa'}
   {#if analyzeError}
     <div class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
       {analyzeError}
@@ -254,6 +276,7 @@
         <IssueList {issues} />
       </div>
     {/if}
+  {/if}
   {/if}
 </div>
 {/if}

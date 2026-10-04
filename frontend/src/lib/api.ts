@@ -123,3 +123,86 @@ export function exportIssuesToCsv(issues: Issue[], filename: string): void {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// ── Drawing assistant API ──────────────────────────────────────────────────
+
+export type IndexState = 'not_indexed' | 'indexing' | 'ready' | 'failed';
+
+export interface IndexStatus {
+  status: IndexState;
+  total_pages: number | null;
+  pages_indexed: number;
+  error: string | null;
+}
+
+export interface DrawingPage {
+  page_number: number;
+  sheet_number: string | null;
+  sheet_title: string | null;
+  label: string;
+  text_source: 'text_layer' | 'ocr' | 'none';
+  char_count: number;
+  width: number | null;
+  height: number | null;
+}
+
+export interface Evidence {
+  quote: string;
+  location: string;
+  confirmed: boolean;
+}
+
+export interface AnswerSource {
+  page_number: number;
+  sheet_number: string | null;
+  sheet_title: string | null;
+  label: string;
+  note: string;
+  evidence: Evidence[];
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  verified: boolean | null;
+  confidence: 'high' | 'medium' | 'low' | null;
+  sources: AnswerSource[];
+  pages_searched: number[];
+  warnings: string[];
+  created_at: string;
+}
+
+export function startIndexing(documentId: string): Promise<IndexStatus> {
+  return request<IndexStatus>(`/api/assistant/${documentId}/index`, { method: 'POST' });
+}
+
+export function getIndexStatus(documentId: string): Promise<IndexStatus> {
+  return request<IndexStatus>(`/api/assistant/${documentId}/index`);
+}
+
+export function listPages(documentId: string): Promise<DrawingPage[]> {
+  return request<DrawingPage[]>(`/api/assistant/${documentId}/pages`);
+}
+
+export function pageImageUrl(documentId: string, pageNumber: number): string {
+  return `${API_BASE}/api/assistant/${documentId}/pages/${pageNumber}/image`;
+}
+
+export function getMessages(documentId: string): Promise<ChatMessage[]> {
+  return request<ChatMessage[]>(`/api/assistant/${documentId}/messages`);
+}
+
+export function askQuestion(
+  documentId: string,
+  question: string
+): Promise<{ question: ChatMessage; answer: ChatMessage }> {
+  return request(`/api/assistant/${documentId}/ask`, {
+    method: 'POST',
+    body: JSON.stringify({ question }),
+  });
+}
+
+export function clearMessages(documentId: string): Promise<void> {
+  return request<void>(`/api/assistant/${documentId}/messages`, { method: 'DELETE' });
+}

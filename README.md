@@ -15,6 +15,31 @@ AI-powered quality assurance for construction and engineering drawings. Upload a
 - **Single URL (simplest):** deploy the Docker image from [`backend/Dockerfile`](backend/Dockerfile) on Render, [Fly.io](https://fly.io) ([`fly.toml`](fly.toml)), or Railway. The container serves the API and the static SPA; the UI uses same-origin `/api/...` (`.env.production` is excluded from the Docker build via [`.dockerignore`](.dockerignore)).
 - **Split frontend + API:** point a Vercel project at the [`frontend/`](frontend/) directory. [`frontend/vercel.json`](frontend/vercel.json) treats the app as a static export (`index.html` + SPA rewrites). Keep [`frontend/.env.production`](frontend/.env.production) set to your public API origin.
 
+## Drawing Assistant
+
+Ask natural-language questions about an uploaded drawing set ("What model is RTU-1?", "How many 2x4 fixtures are there?", "What does detail 3/M2.02 show?"). Open a document and use the **Drawing Assistant** tab. The existing **QA Report** tab is unchanged.
+
+**Pipeline**
+
+```
+PDF -> per-page render -> text (embedded text layer, OCR if absent) -> sheet number/title detection
+    -> stored pages (document_pages)            [index, built once per document]
+
+question -> (follow-up rewrite) -> retrieve top pages (BM25 over text + sheet metadata)
+         -> vision model reads each candidate page (that page's text + image)
+         -> synthesis over per-page findings -> answer + cited sheets
+```
+
+- Only the few retrieved pages are sent to the model, never the whole PDF.
+- Every answer lists its source sheets; click one to open the page (with the quoted evidence).
+- Cited pages must be pages that were retrieved and reported relevant findings. If nothing supports an answer, the reply is "The information could not be verified from the uploaded drawings."
+- Evidence quotes are checked against the page's extracted text; ones that are not found are shown as *unconfirmed*.
+- Counts come from a vision model and carry a warning to verify against the sheets.
+
+**Endpoints** (`/api/assistant`): `POST /{id}/index`, `GET /{id}/index`, `GET /{id}/pages`, `GET /{id}/pages/{n}/image`, `POST /{id}/ask`, `GET|DELETE /{id}/messages`.
+
+**Notes**: indexing runs in the API process after the request returns (progress is polled); a restart mid-index can be retried from the UI. Page images live in the configured storage backend, so on Render's ephemeral `/tmp` they are lost on redeploy (as is the PDF itself). Run tests with `pip install -r backend/requirements-dev.txt && pytest`.
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -120,6 +145,7 @@ python -m backend.seed
 | POST | `/api/analysis/{id}/run` | Run QA analysis |
 | GET | `/api/analysis/{id}/issues` | Get issues for a document |
 | GET | `/api/analysis/{id}/summary` | Issue summary stats |
+| — | `/api/assistant/...` | Drawing assistant (see above) |
 
 Interactive docs: https://blueprint-qa-3.onrender.com/docs
 

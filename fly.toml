@@ -1,5 +1,5 @@
 # Fly.io (alternative to Render/Vercel): install `flyctl`, run `fly launch` from repo root,
-# set app name, then add secrets (DATABASE_URL, ANTHROPIC_API_KEY, etc.) and `fly deploy`.
+# set app name, then add secrets (DATABASE_URL, NVIDIA_API_KEY, etc.) and `fly deploy`.
 # Replace `blueprint-qa` with your unique app name.
 
 app = "blueprint-qa"
