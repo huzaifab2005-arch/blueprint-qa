@@ -23,7 +23,7 @@ from backend.config import get_settings
 from backend.database import AsyncSessionLocal
 from backend.models.assistant import DocumentIndex, DocumentPage
 from backend.models.document import Document
-from backend.services.drawing_metadata import detect_sheet_number, detect_sheet_title
+from backend.services.drawing_metadata import detect_sheet_metadata
 from backend.storage import get_storage
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,9 @@ class ProcessedPage:
     image_bytes: bytes
     width: int
     height: int
+    # Reading-order text, where title blocks come out label-anchored (see
+    # drawing_metadata.detect_title_block). Empty for OCR'd pages.
+    raw_text: str = ""
 
 
 def page_image_key(document_id: uuid.UUID, page_number: int) -> str:
@@ -52,11 +55,14 @@ def count_pdf_pages(pdf_path: str) -> int:
     return int(pdfinfo_from_path(pdf_path)["Pages"])
 
 
-def extract_text_layer(pdf_path: str, page_number: int) -> str:
-    """Embedded text for one page via poppler's pdftotext (empty if none/failed)."""
+def extract_text_layer(pdf_path: str, page_number: int, mode: str = "-layout") -> str:
+    """Embedded text for one page via poppler's pdftotext (empty if none/failed).
+
+    mode "-layout" keeps tables aligned (best for reading); "-raw" gives content
+    order, which keeps a title block's label and value adjacent."""
     try:
         out = subprocess.run(
-            ["pdftotext", "-f", str(page_number), "-l", str(page_number), "-layout", pdf_path, "-"],
+            ["pdftotext", "-f", str(page_number), "-l", str(page_number), mode, pdf_path, "-"],
             capture_output=True, timeout=60, check=True,
         )
         return out.stdout.decode("utf-8", errors="replace").strip()
@@ -99,9 +105,11 @@ def process_page(pdf_path: str, page_number: int) -> ProcessedPage:
         elif not text:
             source = "none"
 
+    raw_text = extract_text_layer(pdf_path, page_number, "-raw") if source == "text_layer" else ""
+
     buf = io.BytesIO()
     image.save(buf, format="JPEG", quality=85)
-    return ProcessedPage(text, source, buf.getvalue(), image.width, image.height)
+    return ProcessedPage(text, source, buf.getvalue(), image.width, image.height, raw_text)
 
 
 async def begin_indexing(db, document_id: uuid.UUID) -> tuple[DocumentIndex, bool]:
@@ -178,12 +186,12 @@ async def run_indexing(document_id: uuid.UUID) -> None:
                 image_path = await asyncio.to_thread(
                     storage.save_bytes, processed.image_bytes, page_image_key(document_id, page_number)
                 )
-                sheet = detect_sheet_number(processed.text)
+                sheet, title = detect_sheet_metadata(processed.raw_text, processed.text)
                 db.add(DocumentPage(
                     document_id=document_id,
                     page_number=page_number,
                     sheet_number=sheet,
-                    sheet_title=detect_sheet_title(processed.text, sheet),
+                    sheet_title=title,
                     text_source=processed.text_source,
                     text=processed.text,
                     image_path=image_path,

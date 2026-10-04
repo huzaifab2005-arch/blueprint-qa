@@ -59,6 +59,8 @@ python -m backend.evals.run_eval --pdf set.pdf --cases cases.json --mode full --
 
 Full mode asks every question through the real model and reports `answer_accuracy`, `citation_accuracy`, `abstention_rate` and `false_answer_rate` (questions the drawings do not answer, but which got an answer anyway; this must be 0). The case format is documented in `run_eval.py`. The built-in sample set is a plumbing and retrieval regression fixture, not a model benchmark: build a case file from your own drawings to measure real quality.
 
+**Sheet detection and retrieval.** Sheet numbers and titles are read from the title block by anchoring on its labels (`DESCRIPTION:`, `SHEET NO.`), which handles plain numeric numbers (1.3, 4.0, 1.1a) as well as E2.01-style ones; if no title block is found the page is shown as "Page N" rather than guessed. Retrieval corrects typos against the document's own vocabulary, treats `A.F.F.` as `AFF` and "back of house" as `BOH`, weights answer-type words (dimensions, size, model, list) below topic words, and favours dimension-dense sheets for dimension questions. **Documents indexed before this change must be re-indexed** (Re-index button) to pick up the new sheet numbers.
+
 Known limits: a question whose answer needs a second hop through the drawings (for example, "how many 2x4 fixtures" when the plan only shows tag `L1`) retrieves the schedule but not the plan. That belongs to the object-counting phase.
 
 ## Tech Stack

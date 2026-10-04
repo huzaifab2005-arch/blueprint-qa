@@ -133,14 +133,14 @@ def summarise(results: list[CaseResult]) -> dict:
 
 def index_pdf_offline(pdf_path: str, max_pages: int = 150) -> list[tuple[int, str | None, str | None, str]]:
     """(page_number, sheet_number, sheet_title, text) for each page, no DB."""
-    from backend.services.drawing_metadata import detect_sheet_number, detect_sheet_title
+    from backend.services.drawing_metadata import detect_sheet_metadata
     from backend.services.indexing_service import count_pdf_pages, process_page
 
     out = []
     for n in range(1, min(count_pdf_pages(pdf_path), max_pages) + 1):
         processed = process_page(pdf_path, n)
-        sheet = detect_sheet_number(processed.text)
-        out.append((n, sheet, detect_sheet_title(processed.text, sheet), processed.text))
+        sheet, title = detect_sheet_metadata(processed.raw_text, processed.text)
+        out.append((n, sheet, title, processed.text))
     return out
 
 

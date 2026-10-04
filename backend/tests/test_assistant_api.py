@@ -271,7 +271,7 @@ async def test_overflow_and_unreadable_pages_are_disclosed(client, monkeypatch):
     pages = [[f"MECHANICAL PLAN {i}", "RTU-1 TRANE YHC074", f"M2.0{i}"] for i in range(1, 7)]
     pages.append(["SCANNED SHEET", "", "A1.01"])
     real = indexing_service.extract_text_layer
-    monkeypatch.setattr(indexing_service, "extract_text_layer", lambda path, n: "" if n == 7 else real(path, n))
+    monkeypatch.setattr(indexing_service, "extract_text_layer", lambda path, n, mode="-layout": "" if n == 7 else real(path, n, mode))
     monkeypatch.setattr(indexing_service, "ocr_page", lambda img: "")
     doc_id = await upload_and_index(client, pages)
     a = (await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "What model is RTU-1?"})).json()["answer"]

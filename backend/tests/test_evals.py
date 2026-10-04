@@ -70,3 +70,19 @@ def test_summarise_and_exit_semantics():
 def test_cli_retrieval_mode_exit_code(capsys):
     assert run_eval.main(["--sample", "--json"]) == 0
     assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["retrieval_recall"] == 1.0
+
+
+def test_numeric_titleblock_set_end_to_end(tmp_path):
+    """Plain numeric sheet numbers are read from the title block through the real
+    pdftotext path, and the right sheets are retrieved."""
+    from backend.evals.sample_set import NUMERIC_CASES, build_numeric_titleblock_pdf
+
+    pdf = tmp_path / "n.pdf"
+    pdf.write_bytes(build_numeric_titleblock_pdf())
+    pages = run_eval.index_pdf_offline(str(pdf))
+    assert [(s, t) for _, s, t, _ in pages] == [
+        ("1.1a", "EQUIPMENT PLAN"), ("1.3", "REFLECTED CEILING PLAN"),
+        ("4.0", "WASHROOM DETAILS"), ("0.1", "GENERAL REQUIREMENTS & SPECIFICATIONS"),
+    ]
+    results = run_eval.run_retrieval(str(pdf), NUMERIC_CASES, top_k=2)
+    assert all(r.ok for r in results), [(r.id, r.detail) for r in results]

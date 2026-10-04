@@ -119,3 +119,48 @@ def build_sample_pdf() -> bytes:
         c.showPage()
     c.save()
     return buf.getvalue()
+
+
+# A second, differently-labelled set: plain numeric sheet numbers (1.3, 4.0) in a
+# title block read as TITLE / NUMBER / "DESCRIPTION:" - the format that defeated the
+# letter-prefix detector on a real set. Same ground-truth idea as SHEETS above.
+NUMERIC_SHEETS: list[tuple[str, str, list[str]]] = [
+    ("1.1a", "EQUIPMENT PLAN", ["BOH PREP AREA", "MOUNT AT 18\" A.F.F. SEE 1.6", "1 MOP SINK  FIAT MSB-2424"]),
+    ("1.3", "REFLECTED CEILING PLAN", [
+        "NEW SUSPENDED 2'x2' GRID CEILING", "10'-8\" A.F.F. TYPICAL THROUGHOUT EXCEPT", "WASHROOM  8'-6\" A.F.F.",
+        "2'x2' RECESSED FIXTURE  MFR: SYLVANIA  CODE: PANELF-1A-032-UNV-D-8-40",
+    ]),
+    ("4.0", "WASHROOM DETAILS", ["WASHROOM DETAIL PLAN", "10'-3 1/2\"", "6'-6\"", "BARRIER FREE VANITY"]),
+    ("0.1", "GENERAL REQUIREMENTS & SPECIFICATIONS", [
+        "VERIFY ALL DIMENSIONS ON SITE. REPORT DIMENSIONS THAT DIFFER.",
+        "THE CONTRACTOR SHALL CONFIRM DIMENSIONS BEFORE FABRICATION.",
+    ]),
+]
+
+NUMERIC_CASES: list[dict] = [
+    {"id": "n-ceiling-typo", "question": "what is the ceiling hieght in BOH?", "expected_sheets": ["1.3"], "must_include": ["10'-8"]},
+    {"id": "n-washroom-dims", "question": "what are the dimensions for the washroom", "expected_sheets": ["4.0"], "must_include": ["10'-3", "6'-6"]},
+    {"id": "n-sheet-ref", "question": "What is shown on sheet 1.3?", "expected_sheets": ["1.3"]},
+    {"id": "n-light-model", "question": "What model are the lights?", "expected_sheets": ["1.3"], "must_include": ["PANELF"]},
+]
+
+
+def build_numeric_titleblock_pdf() -> bytes:
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(792, 1224))
+    for number, title, lines in NUMERIC_SHEETS:
+        y = 1100
+        for ln in lines:
+            c.setFont("Helvetica", 14)
+            c.drawString(60, y, ln)
+            y -= 30
+        # Title block, drawn in the order a CAD export emits it.
+        for text, ypos, size in ((title, 220, 12), (number, 190, 20), ("DESCRIPTION:", 160, 8),
+                                 ("SCALE:", 140, 8), ("DRAWN BY:", 120, 8), ("REVISIONS:", 100, 8)):
+            c.setFont("Helvetica", size)
+            c.drawString(380, ypos, text)
+        c.showPage()
+    c.save()
+    return buf.getvalue()

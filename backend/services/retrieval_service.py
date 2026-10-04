@@ -42,11 +42,17 @@ SYNONYMS: dict[str, list[str]] = {
     "DUCTWORK": ["DUCT"],
     "RTU": ["ROOFTOP", "UNIT", "HVAC"],
     "AHU": ["AIR", "HANDLING", "UNIT"],
-    "BOH": ["BACK", "HOUSE"],
-    "FOH": ["FRONT", "HOUSE"],
     "MODEL": ["MFR", "MANUFACTURER", "TYPE", "CATALOG"],
     "MANUFACTURER": ["MFR", "MODEL"],
     "SIZE": ["DIMENSION", "DIM"],
+    "HEIGHT": ["AFF", "HT"],
+    "HEIGHTS": ["HEIGHT", "AFF"],
+    "TALL": ["HEIGHT", "AFF"],
+    "CEILING": ["CLG"],
+    "DIMENSIONS": ["DIMENSION", "SIZE", "DIM"],
+    "DIMENSION": ["SIZE", "DIM"],
+    "WIDTH": ["WIDE", "DIMENSION"],
+    "DEPTH": ["DEEP", "DIMENSION"],
     "SIZES": ["SIZE", "DIMENSION", "DIM"],
     "PANEL": ["PANELBOARD"],
     "SCHEDULE": ["SCHEDULES"],
@@ -55,8 +61,39 @@ SYNONYMS: dict[str, list[str]] = {
 }
 
 
+# A.F.F., U.N.O., C.W. -> AFF, UNO, CW. Without this "A.F.F." is three one-letter
+# tokens and a question about height can never reach it. Only single-letter groups
+# are joined, so sheet numbers like E2.01 are untouched.
+_DOTTED_ABBR_RE = re.compile(r"\b(?:[A-Z]\.){2,}(?=\s|$|[^A-Z0-9])")
+
+
+# "BACK OF HOUSE" in a drawing and "BOH" in a question are the same thing. Joining
+# them into one token beats expanding BOH into BACK + HOUSE, which matches any page
+# that happens to contain either word.
+_AREA_PHRASES = (
+    (re.compile(r"\bBACK[\s-]+OF[\s-]+(?:THE[\s-]+)?HOUSE\b"), "BOH"),
+    (re.compile(r"\bFRONT[\s-]+OF[\s-]+(?:THE[\s-]+)?HOUSE\b"), "FOH"),
+)
+
+
 def normalise_text(text: str) -> str:
-    return _DIMENSION_RE.sub(lambda m: f"{m.group(1)}X{m.group(2)}", text.upper())
+    text = _DIMENSION_RE.sub(lambda m: f"{m.group(1)}X{m.group(2)}", text.upper())
+    text = _DOTTED_ABBR_RE.sub(lambda m: m.group(0).replace(".", ""), text)
+    for pattern, token in _AREA_PHRASES:
+        text = pattern.sub(token, text)
+    return text
+
+
+# Words that say what KIND of answer is wanted, not what the topic is. "washroom
+# dimensions" is about the washroom; "dimensions" appears all over specification
+# prose and must not outrank the sheet that is actually about the washroom.
+INTENT_WORDS = {
+    "DIMENSION", "DIMENSIONS", "DIM", "SIZE", "SIZES", "HEIGHT", "HEIGHTS", "WIDTH",
+    "LENGTH", "DEPTH", "THICKNESS", "TALL", "WIDE", "LONG", "DEEP", "MODEL", "MODELS",
+    "MANUFACTURER", "MAKE", "BRAND", "LIST", "ITEMS", "ITEM", "QUANTITY", "QTY",
+    "NUMBER", "COUNT", "TOTAL",
+}
+INTENT_WEIGHT = 0.3
 
 
 def _expand_token(tok: str) -> list[str]:
@@ -98,7 +135,61 @@ def query_terms(question: str) -> dict[str, float]:
         # Crude plural folding so "fixtures" matches "FIXTURE".
         if tok.endswith("S") and len(tok) > 3:
             add(tok[:-1], 0.7)
-    return weights
+    # Answer-type words (and anything expanded from them) are weak evidence of topic.
+    return {t: min(w, INTENT_WEIGHT) if t in INTENT_WORDS else w for t, w in weights.items()}
+
+
+def _osa_distance(a: str, b: str) -> int:
+    """Edit distance counting an adjacent swap as one edit (hieght -> height = 1)."""
+    d = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+    for i in range(len(a) + 1):
+        d[i][0] = i
+    for j in range(len(b) + 1):
+        d[0][j] = j
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost)
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+    return d[len(a)][len(b)]
+
+
+def correct_typos(terms: dict[str, float], doc_freq: Counter) -> dict[str, float]:
+    """Add the document's own spelling for query words the document never uses.
+
+    Only plain alphabetic words of 5+ letters that appear nowhere in the document
+    are candidates, and only document words within one edit (two for long words)
+    are offered, so tags and part numbers are never "corrected".
+    """
+    extra: dict[str, float] = {}
+    for term, weight in terms.items():
+        if len(term) < 5 or not term.isalpha() or doc_freq.get(term):
+            continue
+        limit = 1 if len(term) < 8 else 2
+        best, best_df = None, 0
+        for word, df in doc_freq.items():
+            if abs(len(word) - len(term)) > limit or not word.isalpha() or len(word) < 4:
+                continue
+            if df > best_df and _osa_distance(term, word) <= limit:
+                best, best_df = word, df
+        if best:
+            extra[best] = max(extra.get(best, 0.0), weight * 0.9)
+    return extra
+
+
+_DIMENSION_QUESTION_RE = re.compile(
+    r"\b(dimensions?|sizes?|heights?|widths?|lengths?|depths?|clearances?|tall|wide|long|deep|"
+    r"far|distance|thick(?:ness)?|how big|how large)\b",
+    re.IGNORECASE,
+)
+_DIMENSION_TOKEN_RE = re.compile(r"\d+\s*'\s*-\s*\d|\d+\s*\"")
+
+
+def dimension_density(text: str) -> float:
+    """0..1: how dimension-heavy a page is (feet-inch and inch marks). Plans and
+    details score high, specification prose near zero."""
+    return min(1.0, len(_DIMENSION_TOKEN_RE.findall(text)) / 30)
 
 
 @dataclass
@@ -116,16 +207,28 @@ class ScoredPage:
     reasons: list[str]
 
 
+# Plain numeric sheet numbers (1.3, 1.1a) look like any decimal, so in a question
+# they only count after a cue word or a detail-reference slash: "sheet 1.3", "on 1.3",
+# "detail 1/1.3".
+_NUMERIC_REF_RE = re.compile(
+    r"(?:\b(?:sheets?|drawings?|dwgs?|pages?|on|in|see|refer to)\s+|/\s*)(\d{1,2}\.\d{1,2}[a-z]?)\b",
+    re.IGNORECASE,
+)
+
+
 def sheet_refs_in(question: str, pages: list[PageDoc]) -> list[int]:
-    """Page numbers whose sheet number is named in the question ('3/M2.02', 'E2.01')."""
+    """Page numbers whose sheet number is named in the question ('3/M2.02', 'E2.01',
+    'sheet 1.3')."""
     by_key = {
         normalise_sheet_key(p.sheet_number): p.page_number
         for p in pages
         if p.sheet_number
     }
     found: list[int] = []
-    for m in SHEET_ID_RE.finditer(question.upper()):
-        page = by_key.get(normalise_sheet_key(m.group(0)))
+    candidates = [m.group(0) for m in SHEET_ID_RE.finditer(question.upper())]
+    candidates += [m.group(1) for m in _NUMERIC_REF_RE.finditer(question)]
+    for cand in candidates:
+        page = by_key.get(normalise_sheet_key(cand))
         if page and page not in found:
             found.append(page)
     return found
@@ -159,9 +262,11 @@ def rank_pages_detailed(
 
     terms = query_terms(question)
     pinned = sheet_refs_in(question, pages)
+    asks_dimensions = bool(_DIMENSION_QUESTION_RE.search(question))
 
     docs: dict[int, Counter] = {}
     lengths: dict[int, int] = {}
+    page_text = {p.page_number: p.text or "" for p in pages}
     for p in pages:
         toks = tokenize(p.text or "")
         if p.sheet_title:
@@ -170,6 +275,15 @@ def rank_pages_detailed(
             toks += tokenize(p.sheet_number) * 3
         docs[p.page_number] = Counter(toks)
         lengths[p.page_number] = max(len(toks), 1)
+
+    # Spell-correct against the words this document actually uses.
+    vocab: Counter = Counter()
+    for counts in docs.values():
+        vocab.update(counts.keys())
+    for term, weight in correct_typos(terms, vocab).items():
+        if term in INTENT_WORDS:
+            weight = min(weight, INTENT_WEIGHT)
+        terms[term] = max(terms.get(term, 0.0), weight)
 
     n = len(pages)
     avg_len = sum(lengths.values()) / n
@@ -195,6 +309,9 @@ def rank_pages_detailed(
             score += weight * idf * norm
             hit.append(term)
         if score > 0:
+            if asks_dimensions:
+                # A dimension question is answered on plans and details, not in prose.
+                score *= 1 + 0.4 * dimension_density(page_text[page_number])
             scores[page_number] = score
             reasons[page_number] = hit
 
