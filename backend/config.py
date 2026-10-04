@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     assistant_text_layer_min_chars: int = 80
     assistant_history_messages: int = 6
     assistant_concurrency: int = 2
+    # Extra attempts after a transient API error or unparseable model output.
+    assistant_llm_retries: int = 2
 
     class Config:
         env_file = ".env"

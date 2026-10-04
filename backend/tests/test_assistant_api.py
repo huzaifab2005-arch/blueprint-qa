@@ -26,14 +26,17 @@ pytestmark = pytest.mark.asyncio
 SHEET = (36 * 72, 24 * 72)
 
 
-def make_pdf() -> bytes:
+DEFAULT_PAGES = [
+    ["COVER SHEET", "DRAWING INDEX", "G0.01"],
+    ["LIGHTING SCHEDULE", "TYPE L1  2X4 LED TROFFER  MODEL 24LED-4000  QTY 14 BOH", "E2.01"],
+    ["MECHANICAL ROOF PLAN", "RTU-1 TRANE YHC074 7.5 TON", "MAIN SUPPLY DUCT 24x12", "M2.01"],
+]
+
+
+def make_pdf(pages=None) -> bytes:
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=SHEET)
-    pages = [
-        ["COVER SHEET", "DRAWING INDEX", "G0.01"],
-        ["LIGHTING SCHEDULE", "TYPE L1  2X4 LED TROFFER  MODEL 24LED-4000  QTY 14 BOH", "E2.01"],
-        ["MECHANICAL ROOF PLAN", "RTU-1 TRANE YHC074 7.5 TON", "MAIN SUPPLY DUCT 24x12", "M2.01"],
-    ]
+    pages = pages or DEFAULT_PAGES
     for lines in pages:
         y = SHEET[1] - 100
         for ln in lines[:-1]:
@@ -100,8 +103,8 @@ async def client(tmp_path, monkeypatch):
     await engine.dispose()
 
 
-async def upload_and_index(client) -> str:
-    r = await client.post("/api/documents/upload", files={"file": ("set.pdf", make_pdf(), "application/pdf")})
+async def upload_and_index(client, pages=None) -> str:
+    r = await client.post("/api/documents/upload", files={"file": ("set.pdf", make_pdf(pages), "application/pdf")})
     assert r.status_code == 201, r.text
     doc_id = r.json()["id"]
     r = await client.post(f"/api/assistant/{doc_id}/index")
@@ -213,3 +216,122 @@ async def test_unrelated_question_after_history_is_not_rewritten(client):
     a = r.json()["answer"]
     assert a["verified"] is False
     assert not any("Rewrite" in c[0] for c in client.llm.calls)
+
+
+# ── Phase 1 reliability ─────────────────────────────────────────────────────
+
+async def test_hallucinated_model_number_is_rejected(client, monkeypatch):
+    async def liar(model, messages, max_tokens=1200):
+        text = messages[-1]["content"][0]["text"] if isinstance(messages[-1]["content"], list) else ""
+        if "Sheet: M2.01" in text:
+            return {"relevant": True, "answer": "RTU-1 is a CARRIER 50XC060.", "confidence": "high",
+                    "evidence": [{"quote": "CARRIER 50XC060", "location": "plan"}]}
+        return {"relevant": False, "answer": "", "evidence": [], "confidence": "low"}
+    monkeypatch.setattr(assistant_service, "_chat_json", liar)
+    doc_id = await upload_and_index(client)
+    a = (await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "What model is RTU-1?"})).json()["answer"]
+    assert a["verified"] is False and a["sources"] == []
+    assert a["content"].startswith("The information could not be verified")
+    assert any("discarded" in w and "50XC060" in w for w in a["warnings"])
+
+
+async def test_unconfirmed_evidence_caps_confidence(client, monkeypatch):
+    async def sloppy(model, messages, max_tokens=1200):
+        text = messages[-1]["content"][0]["text"] if isinstance(messages[-1]["content"], list) else ""
+        if "Sheet: M2.01" in text:  # answer is on the sheet, but the quote is paraphrased
+            return {"relevant": True, "answer": "RTU-1 is a TRANE YHC074.", "confidence": "high",
+                    "evidence": [{"quote": "unit one is trane", "location": "plan"}]}
+        return {"relevant": False, "answer": "", "evidence": [], "confidence": "low"}
+    monkeypatch.setattr(assistant_service, "_chat_json", sloppy)
+    doc_id = await upload_and_index(client)
+    a = (await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "What model is RTU-1?"})).json()["answer"]
+    assert a["verified"] is True and a["confidence"] == "low"
+    assert any("quotes were not found" in w for w in a["warnings"])
+
+
+async def test_synthesis_cannot_add_unsupported_details(client, monkeypatch):
+    llm = client.llm
+
+    async def inventive(model, messages, max_tokens=1200):
+        text = messages[-1]["content"] if isinstance(messages[-1]["content"], str) else messages[-1]["content"][0]["text"]
+        if "Findings from the sheets" in text:
+            return {"answerable": True, "answer": "Lights are 24LED-4000 and RTU-1 is a LENNOX LGH120H4.",
+                    "confidence": "high", "source_pages": [2, 3]}
+        return await llm(model, messages, max_tokens)
+    monkeypatch.setattr(assistant_service, "_chat_json", inventive)
+    doc_id = await upload_and_index(client)
+    a = (await client.post(f"/api/assistant/{doc_id}/ask",
+                           json={"question": "model of the RTU-1 and the light fixtures 24LED-4000?"})).json()["answer"]
+    assert "LENNOX" not in a["content"]
+    assert "TRANE YHC074" in a["content"]
+    assert any("not found in the sheets" in w for w in a["warnings"])
+
+
+async def test_overflow_and_unreadable_pages_are_disclosed(client, monkeypatch):
+    pages = [[f"MECHANICAL PLAN {i}", "RTU-1 TRANE YHC074", f"M2.0{i}"] for i in range(1, 7)]
+    pages.append(["SCANNED SHEET", "", "A1.01"])
+    real = indexing_service.extract_text_layer
+    monkeypatch.setattr(indexing_service, "extract_text_layer", lambda path, n: "" if n == 7 else real(path, n))
+    monkeypatch.setattr(indexing_service, "ocr_page", lambda img: "")
+    doc_id = await upload_and_index(client, pages)
+    a = (await client.post(f"/api/assistant/{doc_id}/ask", json={"question": "What model is RTU-1?"})).json()["answer"]
+    assert len(a["pages_searched"]) == 4
+    assert any("also matched but were not read" in w for w in a["warnings"])
+    assert any("no readable text" in w for w in a["warnings"])
+
+
+async def test_transient_llm_errors_are_retried(monkeypatch):
+    import openai
+    calls = {"n": 0}
+    err = openai.APIConnectionError(request=httpx.Request("POST", "http://x"))
+
+    async def flaky(model, messages, max_tokens):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise err
+        if calls["n"] == 2:
+            return None  # unparseable
+        return {"ok": True}
+
+    async def no_sleep(_):
+        return None
+    monkeypatch.setattr(assistant_service, "_call_json", flaky)
+    monkeypatch.setattr(assistant_service, "_sleep", no_sleep)
+    assert await assistant_service._chat_json("m", []) == {"ok": True}
+    assert calls["n"] == 3
+
+    async def always_down(model, messages, max_tokens):
+        raise err
+    monkeypatch.setattr(assistant_service, "_call_json", always_down)
+    with pytest.raises(openai.APIConnectionError):
+        await assistant_service._chat_json("m", [])
+
+
+async def test_eval_harness_full_mode_against_inprocess_api(client, monkeypatch, tmp_path):
+    """The harness itself: upload, index, ask, score, clean up, with scripted answers."""
+    from backend.evals import run_eval
+    from backend.evals.sample_set import build_sample_pdf
+
+    async def scripted(model, messages, max_tokens=1200):
+        last = messages[-1]["content"]
+        text = last if isinstance(last, str) else last[0]["text"]
+        if "Sheet: M6.01" in text and "Question: What model is RTU-1?" in text:
+            return {"relevant": True, "answer": "RTU-1 is a TRANE YHC074.", "confidence": "high",
+                    "evidence": [{"quote": "RTU-1  TRANE         YHC074", "location": "RTU schedule"}]}
+        if "Sheet: M6.01" in text and "Question: What model is the chiller?" in text:
+            # A model that invents an answer from an unrelated schedule: grounding must stop it.
+            return {"relevant": True, "answer": "The chiller is a TRANE CVHF2000.", "confidence": "high",
+                    "evidence": [{"quote": "TRANE CVHF2000", "location": "schedule"}]}
+        return {"relevant": False, "answer": "", "evidence": [], "confidence": "low"}
+    monkeypatch.setattr(assistant_service, "_chat_json", scripted)
+
+    pdf = tmp_path / "s.pdf"
+    pdf.write_bytes(build_sample_pdf())
+    cases = [
+        {"id": "pos", "question": "What model is RTU-1?", "expected_sheets": ["M6.01"], "must_include": ["YHC074"]},
+        {"id": "neg", "question": "What model is the chiller?", "expect_unverified": True},
+    ]
+    results = await run_eval.run_full(str(pdf), cases, "http://t", transport=httpx.ASGITransport(app=app))
+    assert [r.ok for r in results] == [True, True], [r.detail for r in results]
+    s = run_eval.summarise(results)
+    assert s["false_answer_rate"] == 0 and s["answer_accuracy"] == 1.0

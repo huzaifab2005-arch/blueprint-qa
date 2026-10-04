@@ -137,14 +137,25 @@ def rank_pages(
     top_k: int = 4,
     min_relative_score: float = 0.2,
 ) -> list[ScoredPage]:
-    """Rank pages for a question. Returns at most top_k pages with a positive score.
+    """Rank pages for a question. Returns at most top_k pages with a positive score."""
+    return rank_pages_detailed(question, pages, top_k, min_relative_score)[0]
+
+
+def rank_pages_detailed(
+    question: str,
+    pages: list[PageDoc],
+    top_k: int = 4,
+    min_relative_score: float = 0.2,
+) -> tuple[list[ScoredPage], list[ScoredPage]]:
+    """Like rank_pages, plus the pages that matched well enough but did not fit in
+    top_k. Callers use the overflow to say the answer may be incomplete.
 
     Pages named explicitly by sheet number in the question are always included
     first. The sheet number and title are indexed with extra weight so
     "lighting schedule" finds the sheet titled LIGHTING SCHEDULE.
     """
     if not pages:
-        return []
+        return [], []
 
     terms = query_terms(question)
     pinned = sheet_refs_in(question, pages)
@@ -197,17 +208,20 @@ def rank_pages(
         )
         seen.add(page_number)
 
+    overflow: list[ScoredPage] = []
     if ranked:
         cutoff = ranked[0][1] * min_relative_score
         for page_number, score in ranked:
-            if len(result) >= top_k:
-                break
             if page_number in seen or score < cutoff:
                 continue
-            result.append(ScoredPage(page_number, score, reasons[page_number]))
-            seen.add(page_number)
+            scored = ScoredPage(page_number, score, reasons[page_number])
+            if len(result) >= top_k:
+                overflow.append(scored)
+            else:
+                result.append(scored)
+                seen.add(page_number)
 
-    return result[:top_k]
+    return result[:top_k], overflow
 
 
 def select_relevant_text(text: str, question: str, max_chars: int) -> str:

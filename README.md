@@ -40,6 +40,27 @@ question -> (follow-up rewrite) -> retrieve top pages (BM25 over text + sheet me
 
 **Notes**: indexing runs in the API process after the request returns (progress is polled); a restart mid-index can be retried from the UI. Page images live in the configured storage backend, so on Render's ephemeral `/tmp` they are lost on redeploy (as is the PDF itself). Run tests with `pip install -r backend/requirements-dev.txt && pytest`.
 
+### Reliability (Phase 1)
+
+Beyond citing sources, answers are checked against the drawing text before they are shown:
+
+- **Grounding.** Identifiers in an answer (model numbers, tags, sizes) must appear in the cited sheet's extracted text or in the question. An unsupported claim is discarded, so the reply becomes "could not be verified". A combined multi-sheet answer that adds unsupported details is replaced by the per-sheet findings.
+- **Confidence is capped by evidence.** If quotes are missing or not found in the sheet text, confidence is *low* regardless of what the model claimed.
+- **Incompleteness is disclosed.** The reply warns when more sheets matched than were read, and when pages have no readable text (so they could not be searched).
+- **Resilience.** Transient API errors and unparseable model output are retried (`ASSISTANT_LLM_RETRIES`, default 2).
+
+**Measuring it.** `backend/evals/` has an evaluation harness:
+
+```bash
+python -m backend.evals.run_eval --sample                          # offline retrieval recall on a synthetic set
+python -m backend.evals.run_eval --pdf set.pdf --cases cases.json  # retrieval recall on your drawings
+python -m backend.evals.run_eval --pdf set.pdf --cases cases.json --mode full --api http://localhost:8000
+```
+
+Full mode asks every question through the real model and reports `answer_accuracy`, `citation_accuracy`, `abstention_rate` and `false_answer_rate` (questions the drawings do not answer, but which got an answer anyway; this must be 0). The case format is documented in `run_eval.py`. The built-in sample set is a plumbing and retrieval regression fixture, not a model benchmark: build a case file from your own drawings to measure real quality.
+
+Known limits: a question whose answer needs a second hop through the drawings (for example, "how many 2x4 fixtures" when the plan only shows tag `L1`) retrieves the schedule but not the plan. That belongs to the object-counting phase.
+
 ## Tech Stack
 
 | Layer | Technology |

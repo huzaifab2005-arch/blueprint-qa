@@ -19,6 +19,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+import openai
 from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,9 +27,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import get_settings
 from backend.models.assistant import ChatMessage, DocumentPage
 from backend.services.drawing_metadata import page_label
+from backend.services.grounding import (
+    MIN_TEXT_CHARS, assess_finding, cap_confidence, confirm_quote,
+    ungrounded_identifiers,
+)
 from backend.services.llm_service import _image_to_base64
 from backend.services.retrieval_service import (
-    PageDoc, rank_pages, select_relevant_text,
+    PageDoc, rank_pages_detailed, select_relevant_text,
 )
 from backend.storage import get_storage
 
@@ -71,6 +76,9 @@ class PageFinding:
     evidence: list[Evidence] = field(default_factory=list)
     confidence: str = "low"
     error: str | None = None
+    # Why the grounding check rejected or down-weighted this finding ("" if clean).
+    flag: str = ""
+    rejected: bool = False
 
 
 @dataclass
@@ -104,6 +112,7 @@ Rules:
 - If this sheet does not contain information that answers the question, set "relevant" to false and leave "answer" empty.
 - "evidence" must be short EXACT quotes of text from the sheet (tags, schedule rows, notes, dimensions) that support your answer.
 - For counts, count only the symbols or tags you can actually identify on this sheet, and say what you counted. Never estimate.
+- For schedules and tables, quote the whole row, including its tag/type, so the value can be traced to the right row.
 - State what THIS sheet establishes. Do not answer for the rest of the set.
 
 Reply with exactly this JSON shape:
@@ -181,7 +190,42 @@ def parse_json_object(raw: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+_RETRYABLE = (
+    openai.APIConnectionError,
+    openai.APITimeoutError,
+    openai.RateLimitError,
+    openai.InternalServerError,
+)
+
+
+async def _sleep(seconds: float) -> None:
+    await asyncio.sleep(seconds)
+
+
 async def _chat_json(model: str, messages: list[dict], max_tokens: int = 1200) -> dict | None:
+    """One JSON-object completion, retried on transient API errors and on output
+    that is not valid JSON. Returns None only if every attempt was unparseable;
+    raises the last API error if every attempt failed outright."""
+    attempts = 1 + max(0, settings.assistant_llm_retries)
+    last_exc: Exception | None = None
+    for i in range(attempts):
+        try:
+            data = await _call_json(model, messages, max_tokens)
+            if data is not None:
+                return data
+            last_exc = None
+            logger.warning("Model returned unparseable JSON (attempt %d/%d)", i + 1, attempts)
+        except _RETRYABLE as exc:
+            last_exc = exc
+            logger.warning("Transient LLM error (attempt %d/%d): %s", i + 1, attempts, exc)
+        if i < attempts - 1:
+            await _sleep(min(2 ** i, 8))
+    if last_exc is not None:
+        raise last_exc
+    return None
+
+
+async def _call_json(model: str, messages: list[dict], max_tokens: int) -> dict | None:
     response = await _client().chat.completions.create(
         model=model,
         max_tokens=max_tokens,
@@ -213,15 +257,6 @@ def _load_model_image_b64(image_path: str | None) -> str | None:
 
 
 # ── Steps ───────────────────────────────────────────────────────────────────
-
-def _norm_alnum(s: str) -> str:
-    return re.sub(r"[^A-Z0-9]", "", s.upper())
-
-
-def confirm_quote(quote: str, page_text: str) -> bool:
-    q = _norm_alnum(quote)
-    return len(q) >= 3 and q in _norm_alnum(page_text)
-
 
 def _history_text(history: list[ChatMessage]) -> str:
     return "\n".join(f"{m.role.upper()}: {m.content}" for m in history)
@@ -293,6 +328,17 @@ async def analyze_page_for_question(page: DocumentPage, question: str) -> PageFi
                 location=str(ev.get("location", "") or "").strip()[:200],
                 confirmed=confirm_quote(quote, page.text or ""),
             ))
+
+    if finding.relevant:
+        verdict = assess_finding(
+            answer, [e.confirmed for e in finding.evidence], page.text or "", question
+        )
+        finding.flag = verdict.reason
+        if not verdict.accepted:
+            finding.relevant = False
+            finding.rejected = True
+        else:
+            finding.confidence = cap_confidence(finding.confidence, verdict.confidence_cap)
     return finding
 
 
@@ -347,6 +393,15 @@ async def synthesize(
     )
 
 
+def fallback_answer(findings: list[PageFinding], pages_by_no: dict[int, DocumentPage]) -> str:
+    """Deterministic answer assembled verbatim from per-page findings, used when the
+    synthesis step cannot be trusted."""
+    return "\n".join(
+        f"{page_label(f.page_number, pages_by_no[f.page_number].sheet_number)}: {f.answer}"
+        for f in findings
+    )
+
+
 def _unverified(searched: list[int], warnings: list[str], note: str = "") -> Answer:
     answer = UNVERIFIED_ANSWER + (f"\n\n{note}" if note else "")
     return Answer(answer, False, None, [], searched, warnings)
@@ -390,12 +445,31 @@ async def answer_question(
     effective = await standalone_question(question, history)
     warnings: list[str] = []
 
-    ranked = rank_pages(
+    ranked, overflow = rank_pages_detailed(
         effective,
         [PageDoc(p.page_number, p.text or "", p.sheet_number, p.sheet_title) for p in pages],
         top_k=settings.assistant_top_k,
     )
     searched = [r.page_number for r in ranked]
+
+    # Pages with no readable text can never be retrieved, so say so rather than
+    # let "not found" imply "not in the drawings".
+    blind = [p for p in pages if len((p.text or "").strip()) < MIN_TEXT_CHARS]
+    if blind:
+        labels = ", ".join(page_label(p.page_number, p.sheet_number) for p in blind[:8])
+        more = f" and {len(blind) - 8} more" if len(blind) > 8 else ""
+        warnings.append(
+            f"{len(blind)} page(s) have no readable text and could not be searched "
+            f"({labels}{more}). They may contain the answer."
+        )
+    if overflow:
+        labels = ", ".join(
+            page_label(o.page_number, pages_by_no[o.page_number].sheet_number) for o in overflow[:8]
+        )
+        warnings.append(
+            f"{len(overflow)} more sheet(s) also matched but were not read ({labels}). "
+            f"The answer may be incomplete."
+        )
     if not ranked:
         return _unverified([], warnings)
 
@@ -416,6 +490,13 @@ async def answer_question(
             f"could not be analysed, so the answer may be incomplete."
         )
 
+    for f in findings:
+        label = page_label(f.page_number, pages_by_no[f.page_number].sheet_number)
+        if f.rejected:
+            warnings.append(f"{label}: a claim was discarded because it is {f.flag}.")
+        elif f.relevant and f.flag:
+            warnings.append(f"{label}: {f.flag}.")
+
     relevant = [f for f in findings if f.relevant]
     if not relevant:
         return _unverified(searched, warnings)
@@ -435,6 +516,21 @@ async def answer_question(
         # The model said it was answerable but cited nothing valid: attribute to
         # the pages it was given rather than to nothing.
         cited = cited or [f.page_number for f in relevant]
+        # The combined answer may only contain identifiers that the findings,
+        # their evidence, the cited pages or the question already contain.
+        support = [effective] + [f.answer for f in relevant]
+        support += [e.quote for f in relevant for e in f.evidence]
+        support += [pages_by_no[n].text or "" for n in cited]
+        extra = ungrounded_identifiers(text, *support)
+        if extra:
+            warnings.append(
+                "The combined answer contained details not found in the sheets "
+                f"({', '.join(extra[:4])}), so the per-sheet findings are shown instead."
+            )
+            text = fallback_answer([by_no[n] for n in cited], pages_by_no)
+        # A combined answer is never more certain than the weakest sheet it uses.
+        for n in cited:
+            conf = cap_confidence(conf, by_no[n].confidence)
 
     for n in cited:
         if not pages_by_no[n].text:
