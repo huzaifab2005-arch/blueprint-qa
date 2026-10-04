@@ -249,9 +249,15 @@ def rank_pages_detailed(
     pages: list[PageDoc],
     top_k: int = 4,
     min_relative_score: float = 0.2,
+    overflow_min_relative_score: float = 0.5,
 ) -> tuple[list[ScoredPage], list[ScoredPage]]:
-    """Like rank_pages, plus the pages that matched well enough but did not fit in
-    top_k. Callers use the overflow to say the answer may be incomplete.
+    """Like rank_pages, plus the pages that matched strongly but did not fit in top_k.
+
+    Callers use the overflow to say the answer may be incomplete, so it holds only
+    pages scoring at least `overflow_min_relative_score` of the best page. The
+    looser `min_relative_score` decides what is worth reading; using it for the
+    warning too flagged a dozen weak matches on broad questions, which made the
+    warning meaningless.
 
     Pages named explicitly by sheet number in the question are always included
     first. The sheet number and title are indexed with extra weight so
@@ -333,7 +339,8 @@ def rank_pages_detailed(
                 continue
             scored = ScoredPage(page_number, score, reasons[page_number])
             if len(result) >= top_k:
-                overflow.append(scored)
+                if score >= ranked[0][1] * overflow_min_relative_score:
+                    overflow.append(scored)
             else:
                 result.append(scored)
                 seen.add(page_number)

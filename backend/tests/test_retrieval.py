@@ -2,6 +2,7 @@ from backend.services.drawing_metadata import (
     detect_sheet_number, detect_sheet_title, format_sheet_number, normalise_sheet_key,
 )
 from backend.services.retrieval_service import (
+    rank_pages_detailed,
     PageDoc, query_terms, rank_pages, select_relevant_text, sheet_refs_in, tokenize,
 )
 from backend.services.assistant_service import confirm_quote, parse_json_object
@@ -182,3 +183,12 @@ def test_boh_matches_back_of_house_without_matching_every_house():
     other = PageDoc(2, "house keeping and back charges apply to the house", None, None)
     assert rank_pages("how big is the BOH?", [area, other])[0].page_number == 1
     assert 2 not in [r.page_number for r in rank_pages("how big is the BOH?", [area, other])]
+
+
+def test_overflow_lists_only_strong_matches():
+    strong = [PageDoc(i, "RTU-1 TRANE " * 6, None, None) for i in range(1, 5)]
+    weak = [PageDoc(i, "RTU-1 " + "filler " * 400, None, None) for i in range(5, 9)]
+    ranked, overflow = rank_pages_detailed("What model is RTU-1?", strong + weak, top_k=2)
+    assert len(ranked) == 2
+    assert {o.page_number for o in overflow} <= {1, 2, 3, 4}   # never the weak pages
+    assert {o.page_number for o in overflow} == set(range(1, 5)) - {r.page_number for r in ranked}
