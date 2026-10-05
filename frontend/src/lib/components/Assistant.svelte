@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import {
-    askQuestion, clearMessages, getIndexStatus, getMessages, listPages, startIndexing,
+    addCountToTakeoff, askQuestion, clearMessages, getIndexStatus, getMessages, listPages, startIndexing,
   } from '$lib/api';
   import type {
     AnswerSource, ChatMessage, CountMarker, CountResult, CountStatus, DrawingPage, Evidence, IndexStatus,
@@ -147,6 +147,16 @@
   }
 
   /** Open a sheet that has counted objects on it, with all markers loaded. */
+  let added: Record<string, string> = {};      // message id -> 'added' or an error
+  async function addToTakeoff(m: ChatMessage) {
+    try {
+      await addCountToTakeoff(documentId, { message_id: m.id });
+      added = { ...added, [m.id]: 'added' };
+    } catch (e) {
+      added = { ...added, [m.id]: (e as Error).message };
+    }
+  }
+
   function openCounted(c: CountResult, page?: number) {
     const first = page ?? c.markers[0]?.page_number ?? Number(Object.keys(c.methods[0]?.per_page ?? {})[0]);
     if (first) open(first, [], c.markers);
@@ -334,6 +344,13 @@
                       {#if c.markers.length === 0}
                         <p class="mt-1 text-[11px] text-gray-400">This count has no per-object markers; open the sheet to check it by eye.</p>
                       {/if}
+                    {/if}
+                    {#if c.quantity !== null && !m.id.startsWith('pending-')}
+                      <div class="mt-2 flex items-center gap-2">
+                        <button class="btn-secondary text-xs" on:click={() => addToTakeoff(m)} disabled={added[m.id] === 'added'}
+                          data-testid="add-to-takeoff">{added[m.id] === 'added' ? 'Added to takeoff ✓' : 'Add to takeoff'}</button>
+                        {#if added[m.id] && added[m.id] !== 'added'}<span class="text-xs text-red-600">{added[m.id]}</span>{/if}
+                      </div>
                     {/if}
                     {#if c.markers_truncated}
                       <p class="mt-1 text-[11px] text-gray-400">Only the first markers are shown.</p>

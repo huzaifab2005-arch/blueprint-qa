@@ -366,8 +366,8 @@ export const getSnapPoints = (documentId: string, page: number) =>
     `/api/measure/${documentId}/pages/${page}/snap`
   );
 
-export const listMeasurements = (documentId: string, page: number) =>
-  request<Measurement[]>(`/api/measure/${documentId}/measurements?page=${page}`);
+export const listMeasurements = (documentId: string, page?: number) =>
+  request<Measurement[]>(`/api/measure/${documentId}/measurements${page ? `?page=${page}` : ''}`);
 
 export const createMeasurement = (
   documentId: string,
@@ -396,3 +396,77 @@ export const createCalibration = (documentId: string, page: number, points: [num
 
 export const deleteCalibration = (documentId: string, id: string) =>
   request<void>(`/api/measure/${documentId}/calibrations/${id}`, { method: 'DELETE' });
+
+// ── Quantity takeoff ──
+
+export type TakeoffStatus = 'verified' | 'needs_verification' | 'manual';
+
+export interface TakeoffItem {
+  id: string;
+  category: string;
+  description: string;
+  quantity: number;
+  unit: string;
+  waste_pct: number;
+  order_quantity: number;
+  source_kind: 'count' | 'measurement' | 'manual';
+  status: TakeoffStatus;
+  confidence: string | null;
+  basis: string;
+  sources: { page_number: number; label: string; note: string }[];
+  warnings: string[];
+  computed_quantity: number | null;
+  uncertainty: number | null;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UnitTotal {
+  lines: number; verified_lines: number; needs_verification: number; manual: number;
+  quantity: number; with_waste: number; verified_quantity: number;
+}
+
+export interface Takeoff {
+  items: TakeoffItem[];
+  lines: number;
+  verified_lines: number;
+  needs_verification_lines: number;
+  manual_lines: number;
+  by_unit: Record<string, UnitTotal>;
+  by_category: Record<string, Record<string, { quantity: number; with_waste: number; lines: number }>>;
+  disclaimer: string;
+}
+
+const json = (body: unknown, method = 'POST'): RequestInit => ({ method, body: JSON.stringify(body) });
+
+export const getTakeoff = (documentId: string) => request<Takeoff>(`/api/takeoff/${documentId}`);
+
+export const addCountToTakeoff = (
+  documentId: string, src: { question?: string; message_id?: string }, category = '',
+) => request<TakeoffItem>(`/api/takeoff/${documentId}/items/from-count`, json({ ...src, category }));
+
+export const addMeasurementsToTakeoff = (
+  documentId: string, measurementIds: string[], description: string, category = '',
+) => request<TakeoffItem>(
+  `/api/takeoff/${documentId}/items/from-measurements`,
+  json({ measurement_ids: measurementIds, description, category }),
+);
+
+export const addManualToTakeoff = (
+  documentId: string,
+  item: { description: string; quantity: number; unit: string; category?: string; waste_pct?: number },
+) => request<TakeoffItem>(`/api/takeoff/${documentId}/items`, json(item));
+
+export const updateTakeoffItem = (
+  documentId: string, itemId: string,
+  patch: Partial<Pick<TakeoffItem, 'description' | 'category' | 'quantity' | 'unit' | 'waste_pct' | 'notes'>>,
+) => request<TakeoffItem>(`/api/takeoff/${documentId}/items/${itemId}`, json(patch, 'PATCH'));
+
+export const refreshTakeoffItem = (documentId: string, itemId: string) =>
+  request<TakeoffItem>(`/api/takeoff/${documentId}/items/${itemId}/refresh`, { method: 'POST' });
+
+export const deleteTakeoffItem = (documentId: string, itemId: string) =>
+  request<void>(`/api/takeoff/${documentId}/items/${itemId}`, { method: 'DELETE' });
+
+export const takeoffCsvUrl = (documentId: string) => `${API_BASE}/api/takeoff/${documentId}/export.csv`;

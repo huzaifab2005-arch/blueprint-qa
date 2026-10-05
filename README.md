@@ -85,6 +85,21 @@ Click **Measure** in the page viewer to measure lengths, paths and areas on a sh
 
 Limits: only horizontal dimension text is used to verify a scale; dimensions without tick marks are not used; scanned (raster-only) sheets have no snap points and rely on calibration. Treat results as checks to confirm against the dimensions on the drawing, not as certified quantities.
 
+### Quantity takeoff (Phase 5)
+
+The **Takeoff** tab collects quantities into lines. A line comes from a count, from saved measurements, or from a person, and keeps the evidence behind its number.
+
+- **From a count:** "Add to takeoff" on a count answer in the Drawing Assistant, or type what to count in the Takeoff tab. Unit is EA; the pages counted and any caveats are stored with the line. Nothing counted means no line (add it manually instead).
+- **From measurements:** tick saved measurements and total them (LF/SF, or m/m² on metric sheets). Lengths and areas, or metric and imperial sheets, are never mixed in one line. Uncertainty is the sum of the measurements' uncertainties.
+- **Manual entry:** always marked **Manual**.
+- **Status is not upgraded.** *Verified* means the source checked itself: a count cross-checked by a second independent reading, or measurements all on verified/measured/calibrated scales. A count with one reading, or measurements on a scale that is only stated or in conflict, is *Needs verification*. A person's entry, or an edited number, is *Manual* (the drawing's own value stays visible beside it, and returns the line to its original status if you restore it).
+- **Waste** is a per-line percentage shown as a separate order quantity (whole items round up); it is never folded into the quantity.
+- **Totals** are per unit only and always say how much of the total is verified.
+- **Refresh** (↻) recomputes a line from the drawing; an edited quantity is kept and the new drawing value is shown next to it.
+- **Export CSV** includes status, sources, basis and warnings for every line (text is escaped so spreadsheets do not run it as a formula).
+
+Limits: lines are only as good as the counts and measurements behind them; there are no prices, assemblies or unit conversions between units, and area counts ("in the BOH") are not filtered by room. Treat the result as a starting list to check against the drawings, not a bid.
+
 ### Running against the real NVIDIA API
 
 Question answering and the counting fallback call a hosted vision model; everything else (indexing, retrieval, counting from tags/legends/schedules) runs without it. To evaluate the full pipeline with a real key:

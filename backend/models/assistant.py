@@ -117,3 +117,36 @@ class Measurement(Base):
     scale_status: Mapped[str] = mapped_column(String(16), nullable=False)       # verified | measured | calibrated | stated | conflict
     warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TakeoffItem(Base):
+    """One line of a quantity takeoff.
+
+    A line records where its quantity came from (a count, saved measurements, or a
+    person) and how far to trust it, so a total is never separated from the evidence
+    behind it. Status is `verified` only when the source checked itself; a person's
+    entry or an edited number is `manual`.
+    """
+    __tablename__ = "takeoff_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    category: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    description: Mapped[str] = mapped_column(String(200), nullable=False)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    unit: Mapped[str] = mapped_column(String(16), nullable=False)
+    waste_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    source_kind: Mapped[str] = mapped_column(String(16), nullable=False)    # count | measurement | manual
+    status: Mapped[str] = mapped_column(String(24), nullable=False)         # verified | needs_verification | manual
+    confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    source_ref: Mapped[dict | None] = mapped_column(JSON, nullable=True)   # count question / measurement ids
+    sources: Mapped[list | None] = mapped_column(JSON, nullable=True)      # [{page_number, label, note}]
+    basis: Mapped[str] = mapped_column(Text, nullable=False, default="")   # how the number was obtained
+    warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    computed_quantity: Mapped[float | None] = mapped_column(Float, nullable=True)   # before any manual edit
+    uncertainty: Mapped[float | None] = mapped_column(Float, nullable=True)         # ± in `unit`, when known
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
