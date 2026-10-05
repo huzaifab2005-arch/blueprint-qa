@@ -31,6 +31,32 @@ def ocr_image(image: Image.Image) -> str:
         return ""
 
 
+def ocr_words(image: Image.Image) -> list[dict]:
+    """Return OCR words with bounding boxes, or [] if OCR is unavailable or fails."""
+    try:
+        import pytesseract
+        data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+    except Exception as e:
+        logger.warning(f"OCR word extraction failed: {e}")
+        return []
+
+    words = []
+    for i, text in enumerate(data["text"]):
+        if not text.strip():
+            continue
+        words.append({
+            "text": text,
+            "left": data["left"][i],
+            "top": data["top"][i],
+            "width": data["width"][i],
+            "height": data["height"][i],
+            "block": data["block_num"][i],
+            "par": data["par_num"][i],
+            "line": data["line_num"][i],
+        })
+    return words
+
+
 def extract_text_from_pdf(file_path: str, max_pages: int = 10) -> list[tuple[int, Image.Image, str]]:
     """
     Returns list of (page_number, image, ocr_text) tuples.

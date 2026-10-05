@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import re
 import json
@@ -6,7 +7,11 @@ import io
 from PIL import Image
 from openai import AsyncOpenAI
 from backend.config import get_settings
-from backend.services.dimension_check import find_dimension_conflicts
+from backend.services.dimension_check import (
+    find_aligned_dimension_conflicts,
+    find_dimension_conflicts,
+)
+from backend.services.ocr_service import ocr_words
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -139,9 +144,11 @@ async def analyze_page(
         return []
 
     kept = _drop_contradicted(_normalise(issues, page_num), ocr_text, page_num)
-    # Deterministic OCR-text check; only the model's own dimension findings are deduplicated.
+    # Deterministic dimension checks; skipped when the model already reported one.
     if not any(i["issue_type"] == "dimension_mismatch" for i in kept):
         kept.extend(find_dimension_conflicts(ocr_text))
+        words = await asyncio.to_thread(ocr_words, image)
+        kept.extend(find_aligned_dimension_conflicts(words, image.width, image.height))
     return kept
 
 
