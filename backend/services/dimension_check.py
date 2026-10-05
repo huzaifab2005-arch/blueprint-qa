@@ -7,7 +7,11 @@ _DIM_RE = re.compile(
         |(?:(?P<bin>\d+)(?:\s+(?P<bnum>\d+)/(?P<bden>\d+))?\s*")""",
     re.VERBOSE,
 )
-_IGNORED_LABELS = {"TYP", "SIM", "NOTE", "NOTES", "MIN", "MAX", "NTS", "EQ", "TYP SIM"}
+# Only labels that name a measured quantity are compared. Schedules and legends list many
+# different items under one name ("LED STRIP 4'-0\"", "LED STRIP 8'-0\""), which is not a conflict.
+_MEASURE_WORDS = re.compile(
+    r"\b(WIDTH|HEIGHT|DEPTH|LENGTH|THICKNESS|CLEARANCE|CLR|HT|SETBACK|SPACING)\b"
+)
 
 
 def _to_inches(m: re.Match) -> float:
@@ -48,7 +52,7 @@ def find_dimension_conflicts(ocr_text: str) -> list[dict]:
         m = matches[0]
         label = re.sub(r"[^A-Z0-9 ]", " ", (line[: m.start()] + " " + line[m.end():]).upper())
         label = re.sub(r"\s+", " ", label).strip()
-        if len(label) < 3 or not re.search(r"[A-Z]{2}", label) or label in _IGNORED_LABELS:
+        if not _MEASURE_WORDS.search(label):
             continue
         by_label[label].setdefault(_to_inches(m), _fmt(m))
 
@@ -132,6 +136,11 @@ def find_aligned_dimension_conflicts(
     tol_x = max(15.0, 0.02 * page_width)
     issues = []
     for i, a in enumerate(dims):
+        # A column of three or more dimension strings is a schedule (e.g. door width/height
+        # columns), not a span dimensioned twice.
+        column = [d for d in dims if abs(d["cx"] - a["cx"]) <= tol_x]
+        if len(column) != 2:
+            continue
         for b in dims[i + 1:]:
             if a["row"] == b["row"] or abs(a["cx"] - b["cx"]) > tol_x:
                 continue

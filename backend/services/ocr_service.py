@@ -1,8 +1,13 @@
 import logging
+import os
 from pathlib import Path
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+# Tesseract's OpenMP threading oversubscribes the CPU and is dramatically slower on
+# large drawing sheets (minutes vs seconds per page). Child processes inherit this.
+os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 
 
 def pdf_to_images(file_path: str, max_pages: int = 10) -> list[Image.Image]:

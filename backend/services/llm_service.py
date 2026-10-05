@@ -5,6 +5,7 @@ import json
 import logging
 import io
 from PIL import Image
+import openai
 from openai import AsyncOpenAI
 from backend.config import get_settings
 from backend.services.dimension_check import (
@@ -18,6 +19,10 @@ settings = get_settings()
 
 # Total tries per page when the reply contains no parseable JSON.
 MAX_ATTEMPTS = 3
+
+# Transient API failures (5xx, rate limit, network) are retried with backoff.
+API_RETRIES = 4
+API_BACKOFF_SECONDS = 2.0
 
 # Mirrors backend.models.issue.IssueSeverity and the categories the prompt lists.
 # Anything outside these sets is dropped in _normalise before it reaches the DB.
@@ -33,22 +38,22 @@ VALID_ISSUE_TYPES = {
 
 SYSTEM_PROMPT = """You are an expert construction drawing QA inspector. You analyze engineering drawings (mechanical, electrical, structural, civil) for quality issues. You are precise, technical, and thorough.\n\nYou reply with a single JSON object and nothing else. No prose, no explanation, no markdown code fences. The object has exactly one key, "issues", whose value is an array. If you find no issues, reply with {"issues": []}."""
 
-USER_PROMPT_TEMPLATE = """Inspect this engineering drawing page (page {page_num} of {total_pages}) for QA defects. Drawings submitted for review usually contain several defects, so check carefully and report everything you can point to.
+USER_PROMPT_TEMPLATE = """Inspect this engineering drawing page (page {page_num} of {total_pages}) for QA defects.
 
 OCR Text extracted from this page:
 ---
 {ocr_text}
 ---
 
-Work through each category in turn, comparing the image against the OCR text:
-- missing_tag: Equipment, rooms, pipes or symbols drawn without a tag/label while similar items are tagged.
-- dimension_mismatch: Dimensions for the same wall or element that disagree, or notes that give conflicting sizes.
+Check for these categories of defects, comparing the image against the OCR text:
+- missing_tag: Equipment, rooms, pipes or symbols drawn without a tag/label while similar items are tagged. An item whose tag appears in the OCR text or on the drawing is tagged; never report it.
+- dimension_mismatch: Two different values given for the same wall, run or element.
 - unlabeled_element: Symbols, components or areas with no identification.
-- inconsistent_annotation: Notes or callouts that contradict each other or the drawing.
-- missing_scale: No scale bar or scale reference on the page.
-- incomplete_detail: Details, sections or sheets referenced in notes (e.g. "DETAIL 5/M-501", "SECTION B-B") that are not shown on this page.
+- inconsistent_annotation: Notes or callouts that give different values for the same thing.
+- missing_scale: Report only if the page has neither a scale bar nor any scale note in the OCR text. If a scale is stated anywhere, do not report it.
+- incomplete_detail: A detail, section or sheet that a note or callout refers to by its number but that is not shown on this page.
 
-For each defect, quote the specific text or describe the specific element in the description so a reviewer can find it. Only report defects you can point to on this page; do not invent any.
+Most pages have few or no defects. Report a defect only if you can quote the exact text from the OCR text, or point to the specific element, that shows it. If a category has no clear defect, report nothing for it; an empty list is a correct answer. Never invent detail numbers, tags or dimensions that do not appear in the OCR text or image, and never report a defect just to fill a category.
 
 Reply with a single JSON object of exactly this shape:
 {{
@@ -56,13 +61,34 @@ Reply with a single JSON object of exactly this shape:
     {{
       "issue_type": "<one of: missing_tag, dimension_mismatch, unlabeled_element, inconsistent_annotation, missing_scale, incomplete_detail>",
       "severity": "<one of: low, medium, high>",
-      "description": "<what is wrong, quoting the relevant text or element>",
-      "location_hint": "<where on the page, e.g. top-right, center, room 204>"
+      "description": "<what is wrong, quoting the exact text or element; use single quotes for any quotation or inch marks inside this string>",
+      "location_hint": "<where on the page, e.g. top-right, center, room number>"
     }}
   ]
 }}
 
 Use only the exact lowercase values listed for issue_type and severity."""
+
+
+def _is_transient(exc: Exception) -> bool:
+    if isinstance(exc, (openai.APIConnectionError, openai.RateLimitError)):
+        return True  # APITimeoutError is an APIConnectionError
+    return isinstance(exc, openai.APIStatusError) and exc.status_code >= 500
+
+
+async def _create_with_retry(client: AsyncOpenAI, page_num: int, **kwargs):
+    for attempt in range(1, API_RETRIES + 1):
+        try:
+            return await client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if not _is_transient(exc) or attempt == API_RETRIES:
+                raise
+            delay = API_BACKOFF_SECONDS * 2 ** (attempt - 1)
+            logger.warning(
+                "Page %s: transient API error (attempt %d/%d), retrying in %.0fs: %s",
+                page_num, attempt, API_RETRIES, delay, exc,
+            )
+            await asyncio.sleep(delay)
 
 
 def _image_to_base64(image: Image.Image) -> str:
@@ -92,7 +118,9 @@ async def analyze_page(
     # The model occasionally ignores the JSON-only instruction and replies with
     # prose only. Sampling is non-deterministic, so retrying usually recovers.
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        response = await client.chat.completions.create(
+        response = await _create_with_retry(
+            client,
+            page_num,
             model=settings.llm_vision_model,
             max_tokens=settings.llm_max_tokens,
             temperature=0.2,
@@ -175,7 +203,22 @@ def _parse_payload(raw: str):
             continue
         if isinstance(obj, dict) and "issues" in obj:
             return obj
-    return None
+    return _salvage_issues(raw)
+
+
+# Drawing text is full of inch marks (37.4"), which the model often leaves
+# unescaped inside description strings, making the JSON invalid. Pull each issue
+# out field by field instead, tolerating stray quotes inside the text values.
+_ISSUE_RE = re.compile(
+    r'"issue_type"\s*:\s*"(?P<issue_type>[^"]*)"\s*,\s*"severity"\s*:\s*"(?P<severity>[^"]*)"\s*,\s*'
+    r'"description"\s*:\s*"(?P<description>.*?)"\s*,\s*"location_hint"\s*:\s*"(?P<location_hint>.*?)"\s*\}',
+    re.DOTALL,
+)
+
+
+def _salvage_issues(raw: str):
+    items = [m.groupdict() for m in _ISSUE_RE.finditer(raw)]
+    return {"issues": items} if items else None
 
 
 # Equipment-style tags such as AHU-1, P-101A, FCU2.
@@ -236,6 +279,10 @@ def _normalise(issues: list, page_num: int) -> list[dict]:
 
         description = str(item.get("description", "")).strip()
         if not description:
+            continue
+        if description[:50] in USER_PROMPT_TEMPLATE:
+            # The model sometimes parrots the category definitions back as findings.
+            logger.debug("Page %s: dropping finding that echoes the prompt", page_num)
             continue
 
         clean.append({
