@@ -14,11 +14,14 @@ class TakeoffItemRead(BaseModel):
     id: uuid.UUID
     category: str
     description: str
+    details: str = ""
+    model: str = ""
     quantity: float
     unit: str
     waste_pct: float
     order_quantity: float
-    source_kind: str            # count | measurement | manual
+    source: str = ""            # 'E2.01-E2.04': the sheets the quantity comes from
+    source_kind: str            # count | measurement | discipline | manual
     status: str                 # verified | needs_verification | manual
     confidence: str | None = None
     basis: str = ""
@@ -88,3 +91,21 @@ class TakeoffItemUpdate(BaseModel):
     unit: str | None = Field(None, min_length=1, max_length=16)
     waste_pct: float | None = Field(None, ge=0, le=100)
     notes: str | None = Field(None, max_length=2000)
+    model: str | None = Field(None, max_length=300)
+    details: str | None = Field(None, max_length=2000)
+
+
+class GenerateRequest(BaseModel):
+    discipline: str = Field(pattern="^(lighting|hvac|plumbing)$")
+    category: str | None = Field(None, max_length=80)
+
+
+class GenerateResult(BaseModel):
+    discipline: str
+    label: str
+    added: int
+    updated: int
+    removed: int
+    kept_edited: int
+    notes: list[str] = []
+    items: list[TakeoffItemRead]

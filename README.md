@@ -116,6 +116,27 @@ The checks are deliberately conservative: on the real 25-sheet test set they rai
 
 Not checked yet: schedule-versus-plan tag consistency, title-block data (project name, dates, revisions) across sheets, and cross-sheet language-model questions.
 
+### Discipline takeoffs: "Give me the lighting takeoff"
+
+Ask the Drawing Assistant for **the lighting takeoff**, **the HVAC takeoff** or **the plumbing fixture takeoff** (or press the buttons at the top of the Takeoff tab). The set is searched for what belongs in that discipline and every item comes back with the same fields:
+
+```
+Item:        2X4 LED TROFFER
+Description: Type L1
+Model:       LITHONIA 2BLT4
+Quantity:    8
+Unit:        EA
+Source:      E2.01            (consecutive sheets collapse: E2.01-E2.04)
+Status:      Verified (cross-checked)
+```
+
+- **How items are found:** schedule rows (a line starting with a tag such as L1, RTU-1 or WC-1, read against the table's own column headers for description, manufacturer/model and QTY) and legend entries (a symbol with a heading and a text block, whose `MFR:` / `MODEL:` / `CODE:` lines give the model). A legend entry that describes the same thing as a schedule row (matched by size and name, e.g. "2'x4' LED TROFFER" and "2X4 LED TROFFER") is merged into that row as another independent reading.
+- **How each item is counted:** with the same evidence as a "how many" question: tags on the plans, legend symbols matched on the plans, schedule QTY. It is **Verified** only when at least two of those agree; one reading is "Needs verification (one reading only)", and an item listed in the drawings but not found on the plans comes back with quantity 0 and a warning. Nothing is estimated and no model call is made, so it works without an API key.
+- **Saved to the Takeoff tab** (category = the discipline), where quantities can be edited, waste added and CSV exported (columns: Item, Description, Model / specification, Quantity, Unit, Drawing source, Status, ...). Generating again refreshes the lines: ones you edited keep your quantity (the drawing's value is shown beside it) and manual lines are never touched.
+- **On the real 25-sheet test set** (a restaurant fit-out with no mechanical or plumbing schedules): lighting gives its 4 legend items (13 recessed, 4 slim recessed, 2 pendant, 0 track, none cross-checked); HVAC finds nothing and says so; plumbing finds the floor drains. Findings like these show what the drawings let a program read; they are a starting list to check, not a bid.
+
+Limits: letter-spaced headings are rejoined by their gaps and can still be misread; wrapped or overlapping legend text can leave a model number incomplete; switches, sensors and controls are not part of the lighting takeoff; sets that draw fixtures with no tag, schedule or legend symbol cannot be taken off.
+
 ### Running against the real NVIDIA API
 
 Question answering and the counting fallback call a hosted vision model; everything else (indexing, retrieval, counting from tags/legends/schedules) runs without it. To evaluate the full pipeline with a real key:

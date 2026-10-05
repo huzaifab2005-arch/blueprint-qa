@@ -405,11 +405,14 @@ export interface TakeoffItem {
   id: string;
   category: string;
   description: string;
+  details: string;
+  model: string;
+  source: string;
   quantity: number;
   unit: string;
   waste_pct: number;
   order_quantity: number;
-  source_kind: 'count' | 'measurement' | 'manual';
+  source_kind: 'count' | 'measurement' | 'discipline' | 'manual';
   status: TakeoffStatus;
   confidence: string | null;
   basis: string;
@@ -503,3 +506,13 @@ export const dismissFinding = (documentId: string, findingId: string) =>
 
 export const restoreFinding = (documentId: string, findingId: string) =>
   request<void>(`/api/checks/${documentId}/dismissals?finding_id=${encodeURIComponent(findingId)}`, { method: 'DELETE' });
+
+export type Discipline = 'lighting' | 'hvac' | 'plumbing';
+
+export interface GenerateResult {
+  discipline: Discipline; label: string; added: number; updated: number; removed: number; kept_edited: number;
+  notes: string[]; items: TakeoffItem[];
+}
+
+export const generateTakeoff = (documentId: string, discipline: Discipline) =>
+  request<GenerateResult>(`/api/takeoff/${documentId}/generate`, json({ discipline }));

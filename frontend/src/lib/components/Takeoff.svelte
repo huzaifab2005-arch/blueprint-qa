@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
-    addCountToTakeoff, addManualToTakeoff, addMeasurementsToTakeoff, deleteTakeoffItem, getTakeoff,
+    addCountToTakeoff, addManualToTakeoff, addMeasurementsToTakeoff, deleteTakeoffItem, generateTakeoff, getTakeoff,
     listMeasurements, refreshTakeoffItem, takeoffCsvUrl, updateTakeoffItem,
   } from '$lib/api';
-  import type { Measurement, Takeoff, TakeoffItem } from '$lib/api';
+  import type { Discipline, Measurement, Takeoff, TakeoffItem } from '$lib/api';
 
   export let documentId: string;
 
@@ -27,7 +27,16 @@
     needs_verification: { label: 'Needs verification', cls: 'bg-amber-100 text-amber-800' },
     manual: { label: 'Manual', cls: 'bg-gray-100 text-gray-700' },
   };
-  const kindName: Record<string, string> = { count: 'Count', measurement: 'Measured', manual: 'Entered' };
+  const kindName: Record<string, string> = { count: 'Count', measurement: 'Measured', discipline: 'Takeoff', manual: 'Entered' };
+  const disciplines: [Discipline, string][] = [['lighting', 'Lighting'], ['hvac', 'HVAC'], ['plumbing', 'Plumbing fixtures']];
+  let genNote = '';
+  const generate = (d: Discipline) => run(async () => {
+    genNote = '';
+    const r = await generateTakeoff(documentId, d);
+    genNote = r.items.length
+      ? `${r.label}: ${r.added} added, ${r.updated} updated${r.removed ? `, ${r.removed} removed` : ''}${r.kept_edited ? `, ${r.kept_edited} kept as you edited them` : ''}.`
+      : r.notes.join(' ');
+  });
 
   async function load() {
     try {
@@ -69,6 +78,17 @@
     <a class="btn-secondary text-xs {data && data.lines ? '' : 'pointer-events-none opacity-50'}" href={takeoffCsvUrl(documentId)} download>Export CSV</a>
   </div>
 
+  <div class="rounded-lg border border-gray-200 bg-white p-3" data-testid="generate-bar">
+    <p class="text-sm font-semibold text-gray-800">Generate a takeoff from the drawings</p>
+    <div class="mt-2 flex flex-wrap items-center gap-2">
+      {#each disciplines as [key, label]}
+        <button class="btn-primary text-xs" disabled={busy} on:click={() => generate(key)} data-testid="generate-{key}">{busy ? 'Working…' : label}</button>
+      {/each}
+      <span class="text-[11px] text-gray-400">Reads schedules and legends, then counts each item on the plans. Run again to refresh; lines you edited are kept.</span>
+    </div>
+    {#if genNote}<p class="mt-2 text-xs text-gray-600" data-testid="generate-note">{genNote}</p>{/if}
+  </div>
+
   {#if error}<p class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{error}</p>{/if}
 
   {#if loading}
@@ -94,7 +114,7 @@
       <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
         <table class="w-full text-sm">
           <thead class="bg-gray-50 text-left text-[11px] uppercase tracking-wide text-gray-500">
-            <tr><th class="px-3 py-2">Item</th><th class="px-2">Qty</th><th class="px-2">Unit</th><th class="px-2">Waste %</th>
+            <tr><th class="px-3 py-2">Item</th><th class="px-2">Description</th><th class="px-2">Model / spec</th><th class="px-2">Qty</th><th class="px-2">Unit</th><th class="px-2">Waste %</th>
               <th class="px-2">Order</th><th class="px-2">Status</th><th class="px-2">Source</th><th class="px-2"></th></tr>
           </thead>
           <tbody>
@@ -106,6 +126,8 @@
                   <input class="mt-0.5 w-full rounded border border-transparent px-1 text-xs text-gray-500 hover:border-gray-200 focus:border-blue-300 focus:outline-none"
                     placeholder="Category" value={it.category} aria-label="Category" on:change={(e) => patch(it, { category: e.currentTarget.value })} />
                 </td>
+                <td class="max-w-56 px-2 py-2 text-xs text-gray-600" title={it.details}>{it.details ? (it.details.length > 90 ? it.details.slice(0, 90) + '…' : it.details) : '—'}</td>
+                <td class="max-w-48 px-2 py-2 text-xs text-gray-800" title={it.model}>{it.model || '—'}</td>
                 <td class="px-2 py-2">
                   <input type="number" min="0" step="any" class="w-20 rounded border border-gray-200 px-1 py-0.5 tabular-nums" aria-label="Quantity"
                     value={it.quantity} on:change={(e) => patch(it, { quantity: Number(e.currentTarget.value) })} />
@@ -126,18 +148,18 @@
                 </td>
                 <td class="px-2 py-2 text-xs text-gray-600">
                   {kindName[it.source_kind]}
-                  {#if it.sources.length}<span class="block text-gray-400">{it.sources.map((s) => s.label).join(', ')}</span>{/if}
+                  {#if it.source}<span class="block font-medium text-gray-800" data-testid="line-source">{it.source}</span>{/if}
                   <button class="text-blue-700 underline" on:click={() => (open = open === it.id ? null : it.id)}>
                     {open === it.id ? 'hide' : 'details'}{it.warnings.length ? ` (${it.warnings.length} note${it.warnings.length === 1 ? '' : 's'})` : ''}
                   </button>
                 </td>
                 <td class="whitespace-nowrap px-2 py-2 text-right text-xs">
-                  {#if it.source_kind !== 'manual'}<button class="text-gray-500 hover:text-blue-700" disabled={busy} on:click={() => refresh(it)} title="Recompute from the drawing">↻</button>{/if}
+                  {#if it.source_kind === 'count' || it.source_kind === 'measurement'}<button class="text-gray-500 hover:text-blue-700" disabled={busy} on:click={() => refresh(it)} title="Recompute from the drawing">↻</button>{/if}
                   <button class="ml-2 text-gray-400 hover:text-red-600" disabled={busy} aria-label="Delete line" on:click={() => remove(it)}>✕</button>
                 </td>
               </tr>
               {#if open === it.id}
-                <tr class="bg-gray-50 text-xs text-gray-600"><td colspan="8" class="px-3 py-2">
+                <tr class="bg-gray-50 text-xs text-gray-600"><td colspan="10" class="px-3 py-2">
                   <p>{it.basis}</p>
                   {#each it.sources as s}<p class="text-gray-500">{s.label}: {s.note}</p>{/each}
                   {#each it.warnings as w}<p class="mt-1 rounded bg-amber-50 px-2 py-1 text-amber-800">{w}</p>{/each}

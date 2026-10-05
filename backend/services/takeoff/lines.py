@@ -55,6 +55,24 @@ class LineDraft:
     sources: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     uncertainty: float | None = None
+    details: str = ""
+    model: str = ""
+
+
+def source_text(sources: list[dict]) -> str:
+    """'E2.01-E2.04' for sheets on consecutive pages (three or more), else a list."""
+    pages = sorted({(s["page_number"], s.get("label") or f"page {s['page_number']}") for s in sources})
+    out, i = [], 0
+    while i < len(pages):
+        j = i
+        while j + 1 < len(pages) and pages[j + 1][0] == pages[j][0] + 1:
+            j += 1
+        if j - i >= 2:
+            out.append(f"{pages[i][1]}-{pages[j][1]}")
+        else:
+            out.extend(p[1] for p in pages[i:j + 1])
+        i = j + 1
+    return ", ".join(out)
 
 
 def normalise_unit(unit: str) -> str:
@@ -201,8 +219,9 @@ def summarise(items: list) -> dict:
 
 
 STATUS_TEXT = {VERIFIED: "Verified", NEEDS_VERIFICATION: "Needs verification", MANUAL: "Manual entry"}
-CSV_HEADER = ["Category", "Description", "Quantity", "Unit", "Waste %", "Order quantity", "Status", "Confidence",
-              "Uncertainty (±)", "Source", "Pages", "Basis", "Warnings", "Notes"]
+CSV_HEADER = ["Category", "Item", "Description", "Model / specification", "Quantity", "Unit", "Waste %",
+              "Order quantity", "Drawing source", "Status", "Confidence", "Uncertainty (±)", "Origin", "Basis",
+              "Warnings", "Notes"]
 
 
 def _safe(cell) -> str:
@@ -216,14 +235,14 @@ def to_csv(items: list) -> str:
     w = csv.writer(out)
     w.writerow(CSV_HEADER)
     for it in sorted(items, key=lambda i: ((i.category or "~"), i.description.lower())):
-        pages = ", ".join(s.get("label", str(s.get("page_number"))) for s in (it.sources or []))
         status = STATUS_TEXT.get(it.status, it.status)
         if it.source_kind != "manual" and it.status == MANUAL:
             status = "Manual (edited from computed " + f"{it.computed_quantity:g})" if it.computed_quantity is not None else "Manual (edited)"
-        w.writerow([_safe(it.category), _safe(it.description), f"{it.quantity:g}", it.unit, f"{it.waste_pct:g}",
-                    f"{quantity_with_waste(it.quantity, it.waste_pct, it.unit):g}", status, it.confidence or "",
-                    f"{it.uncertainty:g}" if it.uncertainty is not None else "", it.source_kind, _safe(pages),
-                    _safe(it.basis), _safe(" | ".join(it.warnings or [])), _safe(it.notes)])
+        w.writerow([_safe(it.category), _safe(it.description), _safe(getattr(it, "details", "")),
+                    _safe(getattr(it, "model", "")), f"{it.quantity:g}", it.unit, f"{it.waste_pct:g}",
+                    f"{quantity_with_waste(it.quantity, it.waste_pct, it.unit):g}", _safe(source_text(it.sources or [])),
+                    status, it.confidence or "", f"{it.uncertainty:g}" if it.uncertainty is not None else "",
+                    it.source_kind, _safe(it.basis), _safe(" | ".join(it.warnings or [])), _safe(it.notes)])
     w.writerow([])
     w.writerow([DISCLAIMER])
     return out.getvalue()

@@ -1,4 +1,5 @@
 """Quantity takeoff: lines built from counts, measurements or manual entries."""
+import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -10,13 +11,16 @@ from backend.database import get_db
 from backend.models.assistant import ChatMessage, DocumentIndex, DocumentPage, Measurement, TakeoffItem
 from backend.models.document import Document
 from backend.schemas.takeoff import (
-    FromCountRequest, FromMeasurementsRequest, ManualItemCreate, TakeoffItemRead, TakeoffItemUpdate, TakeoffRead,
+    FromCountRequest, FromMeasurementsRequest, GenerateRequest, GenerateResult, ManualItemCreate, TakeoffItemRead,
+    TakeoffItemUpdate, TakeoffRead,
 )
 from backend.services.counting.count_answer import _local_pdf, to_payload
 from backend.services.counting.count_service import PageMeta, count_objects
 from backend.services.counting.objects import is_count_question, parse_count_question
 from backend.services.drawing_metadata import page_label
 from backend.services.takeoff import lines
+from backend.services.takeoff.disciplines import DISCIPLINES, Discipline
+from backend.services.takeoff.discipline_takeoff import build_discipline_takeoff
 from backend.services.takeoff.lines import LineDraft, TakeoffError
 
 router = APIRouter(prefix="/api/takeoff", tags=["takeoff"])
@@ -38,8 +42,8 @@ async def _item(db: AsyncSession, document_id: uuid.UUID, item_id: uuid.UUID) ->
 
 def _read(it: TakeoffItem) -> TakeoffItemRead:
     return TakeoffItemRead(
-        id=it.id, category=it.category, description=it.description, quantity=it.quantity, unit=it.unit,
-        waste_pct=it.waste_pct, order_quantity=lines.quantity_with_waste(it.quantity, it.waste_pct, it.unit),
+        id=it.id, category=it.category, description=it.description, details=it.details or "", model=it.model or "",
+        source=lines.source_text(it.sources or []), quantity=it.quantity, unit=it.unit, waste_pct=it.waste_pct, order_quantity=lines.quantity_with_waste(it.quantity, it.waste_pct, it.unit),
         source_kind=it.source_kind, status=it.status, confidence=it.confidence, basis=it.basis,
         sources=it.sources or [], warnings=it.warnings or [], computed_quantity=it.computed_quantity,
         uncertainty=it.uncertainty, notes=it.notes, created_at=it.created_at, updated_at=it.updated_at,
@@ -192,6 +196,10 @@ async def update_item(document_id: uuid.UUID, item_id: uuid.UUID, body: TakeoffI
         it.waste_pct = body.waste_pct
     if body.notes is not None:
         it.notes = body.notes
+    if body.model is not None:
+        it.model = body.model.strip()
+    if body.details is not None:
+        it.details = body.details.strip()
     if body.unit is not None:
         unit = lines.normalise_unit(body.unit)
         if it.source_kind != "manual" and unit != it.unit:
@@ -235,6 +243,9 @@ async def refresh_item(document_id: uuid.UUID, item_id: uuid.UUID, db: AsyncSess
     old_computed = it.computed_quantity
     if it.source_kind == "manual":
         raise HTTPException(status_code=422, detail="A manual line has no source to refresh from.")
+    if it.source_kind == "discipline":
+        raise HTTPException(status_code=422, detail="This line came from a discipline takeoff. Generate that takeoff "
+                                                    "again to refresh it.")
     if it.source_kind == "count":
         payload = await _run_count(db, document, ref.get("question") or f"how many {it.description}")
         labels = payload.pop("_labels")
@@ -275,3 +286,78 @@ async def export_csv(document_id: uuid.UUID, db: AsyncSession = Depends(get_db))
         "﻿" + lines.to_csv(items), media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{stem}-takeoff.csv"'},
     )
+
+
+async def generate_discipline(db: AsyncSession, document: Document, disc: Discipline, category: str | None = None) -> GenerateResult:
+    """Build (or rebuild) one discipline's lines from the drawings.
+
+    Lines are matched to the previous run by item key. A line a person edited keeps their
+    quantity (the drawing's value is shown beside it); untouched lines are replaced, and
+    untouched lines the drawings no longer produce are removed."""
+    index = await db.get(DocumentIndex, document.id)
+    if index is None or index.status != "ready":
+        raise HTTPException(status_code=409, detail="This document is not indexed yet. Index it first.")
+    pages = (await db.execute(
+        select(DocumentPage).where(DocumentPage.document_id == document.id).order_by(DocumentPage.page_number)
+    )).scalars().all()
+    metas = [PageMeta(p.page_number, p.sheet_number, p.sheet_title, p.text or "", p.image_path) for p in pages]
+    try:
+        pdf = await _local_pdf(document)
+    except FileNotFoundError:
+        raise HTTPException(status_code=409, detail="A takeoff needs the original PDF, which is no longer in storage.")
+    result = await asyncio.to_thread(build_discipline_takeoff, pdf, metas, disc)
+
+    existing = {
+        (it.source_ref or {}).get("key"): it for it in await _all(db, document.id)
+        if it.source_kind == "discipline" and (it.source_ref or {}).get("discipline") == disc.key
+    }
+    cat = (category if category is not None else disc.label).strip()
+    added = updated = kept = 0
+    fresh: set[str] = set()
+    out: list[TakeoffItem] = []
+    for item in result.items:
+        fresh.add(item.key)
+        ref = {"discipline": disc.key, "key": item.key, "entry": item.entry}
+        prev = existing.get(item.key)
+        if prev is None:
+            it = TakeoffItem(document_id=document.id, category=cat, description=item.item[:200], quantity=float(item.quantity),
+                             unit=item.unit, waste_pct=0.0, source_kind="discipline", status=item.status, notes="")
+            db.add(it)
+            added += 1
+        else:
+            it = prev
+            updated += 1
+        edited = prev is not None and prev.status == lines.MANUAL
+        keep_qty, keep_status, keep_conf = it.quantity, it.status, it.confidence
+        it.computed_quantity = float(item.quantity)
+        it.details, it.model, it.basis = item.details[:2000], item.model[:300], item.basis
+        it.sources, it.source_ref, it.unit = item.sources, ref, item.unit
+        it.warnings = list(item.warnings)
+        if edited:
+            it.quantity, it.status, it.confidence = keep_qty, keep_status, keep_conf
+            it.source_ref = {**ref, "original": {"status": item.status, "confidence": item.confidence}}
+            it.warnings.append(f"Quantity was edited by a person; the drawing now gives {item.quantity:g} {item.unit}.")
+            kept += 1
+        else:
+            it.quantity, it.status, it.confidence = float(item.quantity), item.status, item.confidence
+        out.append(it)
+    removed = 0
+    for k, it in existing.items():
+        if k not in fresh:
+            if it.status == lines.MANUAL:
+                it.warnings = list(it.warnings or []) + ["The drawings no longer produce this item; kept because you edited it."]
+                kept += 1
+            else:
+                await db.delete(it)
+                removed += 1
+    await db.commit()
+    for it in out:
+        await db.refresh(it)
+    return GenerateResult(discipline=disc.key, label=disc.label, added=added, updated=updated, removed=removed,
+                          kept_edited=kept, notes=result.notes, items=[_read(i) for i in out])
+
+
+@router.post("/{document_id}/generate", response_model=GenerateResult)
+async def generate(document_id: uuid.UUID, body: GenerateRequest, db: AsyncSession = Depends(get_db)):
+    document = await _document(db, document_id)
+    return await generate_discipline(db, document, DISCIPLINES[body.discipline], body.category)

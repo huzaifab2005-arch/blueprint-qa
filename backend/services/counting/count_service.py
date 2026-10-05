@@ -244,10 +244,11 @@ class Evidence:
 
 
 def collect_evidence(
-    pdf_path: str, metas: dict[int, PageMeta], page_numbers: list[int], cls: ObjectClass, parsed: ParsedCount
+    pdf_path: str, metas: dict[int, PageMeta], page_numbers: list[int], cls: ObjectClass, parsed: ParsedCount,
+    matcher=None,
 ) -> Evidence:
     ev = Evidence()
-    matcher = _legend_matcher(cls, parsed)
+    matcher = matcher or _legend_matcher(cls, parsed)
     row_words: set[int] = set()
     plan_pages: list[int] = []
 
@@ -284,7 +285,7 @@ def collect_evidence(
             asked = {_template_key(t) for t in templates}
             by_key = {_template_key(t): t for t in everything}
             for t in templates:
-                by_key.setdefault(_template_key(t), t)
+                by_key[_template_key(t)] = t     # the asked-for heading names the swatch, not another entry's
             all_templates = list(by_key.values())
             exclude = {id(m) for t in all_templates for m in t.members}
             counts = [count_template(geom, t, exclude) for t in all_templates]

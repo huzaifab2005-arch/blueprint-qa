@@ -148,6 +148,9 @@ class TakeoffItem(Base):
     computed_quantity: Mapped[float | None] = mapped_column(Float, nullable=True)   # before any manual edit
     uncertainty: Mapped[float | None] = mapped_column(Float, nullable=True)         # ± in `unit`, when known
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # What the drawing says about the item: a longer description and the model/spec.
+    details: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    model: Mapped[str] = mapped_column(String(300), nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

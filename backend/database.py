@@ -110,7 +110,11 @@ async def get_db() -> AsyncSession:
 # Columns added after a table first shipped. create_all() creates missing TABLES but
 # never alters existing ones, so a database created by an earlier version would
 # otherwise be missing these and fail on first insert.
-_ADDED_COLUMNS = (("chat_messages", "count_result", "JSON"),)
+_ADDED_COLUMNS = (
+    ("chat_messages", "count_result", "JSON"),
+    ("takeoff_items", "details", "TEXT NOT NULL DEFAULT ''"),
+    ("takeoff_items", "model", "VARCHAR(300) NOT NULL DEFAULT ''"),
+)
 
 
 def _ensure_columns(sync_conn) -> None:

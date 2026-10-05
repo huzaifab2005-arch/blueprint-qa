@@ -203,3 +203,132 @@ async def test_manual_lines_totals_and_csv_export(client):
     assert "Verified" in csv.text and "Manual entry" in csv.text and "E2.01" in csv.text and "not guaranteed" in csv.text
 
     assert (await client.get("/api/takeoff/00000000-0000-0000-0000-000000000001")).status_code == 404
+
+
+# ── Discipline takeoffs ("give me the lighting takeoff") ──
+
+from backend.services.takeoff import answer as takeoff_answer  # noqa: E402
+from backend.services.takeoff.discipline_takeoff import despace, signature  # noqa: E402
+from backend.services.takeoff.disciplines import is_takeoff_request, parse_takeoff_request  # noqa: E402
+from backend.services.counting.pdf_geometry import Word  # noqa: E402
+
+
+def test_requests_are_recognised():
+    assert parse_takeoff_request("Give me the lighting takeoff.").key == "lighting"
+    assert parse_takeoff_request("Give me the HVAC takeoff.").key == "hvac"
+    assert parse_takeoff_request("Give me the plumbing fixture takeoff.").key == "plumbing"
+    assert parse_takeoff_request("mechanical take-off please").key == "hvac"
+    assert is_takeoff_request("give me the takeoff") and parse_takeoff_request("give me the takeoff") is None
+    assert not is_takeoff_request("how many lights are there?")
+
+
+def test_sources_collapse_to_ranges_only_when_consecutive():
+    src = lambda *pg: [{"page_number": p, "label": f"E2.0{p}"} for p in pg]          # noqa: E731
+    assert lines.source_text(src(1, 2, 3, 4)) == "E2.01-E2.04"
+    assert lines.source_text(src(1, 2)) == "E2.01, E2.02"
+    assert lines.source_text(src(1, 2, 4, 5, 6)) == "E2.01, E2.02, E2.04-E2.06"
+
+
+def test_same_item_is_recognised_across_spellings():
+    assert signature("2'x4' LED TROFFER") & signature("2X4 LED TROFFER")
+    assert signature("6\" DOWNLIGHT") & signature("6IN LED DOWNLIGHT")
+    assert not (signature("PENDANT") & signature("2X4 LED TROFFER"))
+
+
+def test_letter_spaced_headings_are_rejoined_by_their_gaps():
+    def w(text, x0, x1):
+        return Word(text, x0, x1, 0.0, 8.0)
+    # "TRACK FIXTURE" drawn one letter at a time: tight letters, wider word break
+    letters, x = [], 0.0
+    for ch in "TRACK":
+        letters.append(w(ch, x, x + 5)); x += 5
+    x += 3.4
+    for ch in "FIXTURE":
+        letters.append(w(ch, x, x + 5)); x += 5
+    assert despace(letters) == "TRACK FIXTURE"
+    assert despace([w("NORMAL", 0, 30), w("TEXT", 32, 50)]) == "NORMAL TEXT"
+
+
+async def _plumbing_doc(client):
+    from backend.evals.count_sample import build_count_pdf
+    r = await client.post("/api/documents/upload", files={"file": ("p.pdf", build_count_pdf(plumbing=True), "application/pdf")})
+    doc = r.json()["id"]
+    await client.post(f"/api/assistant/{doc}/index")
+    assert (await client.get(f"/api/assistant/{doc}/index")).json()["status"] == "ready"
+    return doc
+
+
+async def test_lighting_takeoff_in_chat_has_every_requested_field(client):
+    doc = await _plumbing_doc(client)
+    a = (await client.post(f"/api/assistant/{doc}/ask", json={"question": "Give me the lighting takeoff."})).json()["answer"]
+    assert not client.llm.calls                                        # deterministic: no model call
+    text = a["content"]
+    for field in ("Item:", "Model:", "Quantity:", "Unit:", "Source:", "Status:"):
+        assert field in text
+    assert "2X4 LED TROFFER" in text and "LITHONIA 2BLT4" in text and "Quantity: 8" in text and "Source: E2.01" in text
+    assert "Verified (cross-checked)" in text and a["verified"] is True
+    assert any(s["label"] == "E2.01" for s in a["sources"]) and any("not guaranteed" in w for w in a["warnings"])
+
+    t = (await client.get(f"/api/takeoff/{doc}")).json()
+    first = next(i for i in t["items"] if i["model"] == "LITHONIA 2BLT4")
+    assert first["description"] == "2X4 LED TROFFER" and first["unit"] == "EA" and first["source"] == "E2.01"
+    assert first["status"] == "verified" and first["category"] == "Lighting" and first["details"].startswith("Type L1")
+
+
+async def test_hvac_and_plumbing_takeoffs_and_unverified_items_say_why(client):
+    doc = await _plumbing_doc(client)
+    h = (await client.post(f"/api/assistant/{doc}/ask", json={"question": "Give me the HVAC takeoff."})).json()["answer"]
+    assert "TRANE" in h["content"] and "Source: M2.01" in h["content"]
+    p = (await client.post(f"/api/assistant/{doc}/ask", json={"question": "Give me the plumbing fixture takeoff."})).json()["answer"]
+    assert "KOHLER K-96053" in p["content"] and "Quantity: 2" in p["content"] and "Quantity: 3" in p["content"]
+    assert "Needs verification (one reading only)" in p["content"] and p["verified"] is False
+    assert (await client.get(f"/api/takeoff/{doc}")).json()["lines"] == 2 + 3 and True
+
+
+async def test_unknown_discipline_gets_a_menu_and_absent_discipline_gets_an_honest_empty_answer(client):
+    doc = await _upload_count_set(client)                              # no plumbing sheets in this set
+    menu = (await client.post(f"/api/assistant/{doc}/ask", json={"question": "Give me the takeoff"})).json()["answer"]
+    assert "lighting, HVAC and plumbing" in menu["content"]
+    none = (await client.post(f"/api/assistant/{doc}/ask", json={"question": "Give me the plumbing takeoff"})).json()["answer"]
+    assert "0 items" in none["content"] and "nothing was assumed" in none["content"] and none["verified"] is False
+    assert (await client.get(f"/api/takeoff/{doc}")).json()["lines"] == 0
+
+
+async def test_regenerating_does_not_duplicate_and_respects_edits_and_removals(client):
+    doc = await _plumbing_doc(client)
+    g1 = (await client.post(f"/api/takeoff/{doc}/generate", json={"discipline": "plumbing"})).json()
+    assert (g1["added"], g1["updated"], g1["removed"]) == (3, 0, 0)
+    wc = next(i for i in g1["items"] if "WATER CLOSET" in i["description"])
+    await client.patch(f"/api/takeoff/{doc}/items/{wc['id']}", json={"quantity": 5})
+    manual = (await client.post(f"/api/takeoff/{doc}/items", json={"description": "Allowance", "quantity": 1, "unit": "EA"})).json()
+    stale = {"id": None}
+
+    g2 = (await client.post(f"/api/takeoff/{doc}/generate", json={"discipline": "plumbing"})).json()
+    assert (g2["added"], g2["updated"], g2["removed"], g2["kept_edited"]) == (0, 3, 0, 1)
+    kept = next(i for i in g2["items"] if i["id"] == wc["id"])
+    assert kept["quantity"] == 5 and kept["status"] == "manual" and kept["computed_quantity"] == 2
+    assert any("edited by a person" in w for w in kept["warnings"])
+    t = (await client.get(f"/api/takeoff/{doc}")).json()
+    assert t["lines"] == 4 and any(i["id"] == manual["id"] for i in t["items"])        # the manual line is untouched
+
+    # a discipline line cannot be refreshed one at a time, and its unit is fixed
+    assert (await client.post(f"/api/takeoff/{doc}/items/{wc['id']}/refresh")).status_code == 422
+    assert (await client.patch(f"/api/takeoff/{doc}/items/{wc['id']}", json={"unit": "LF"})).status_code == 422
+    assert stale["id"] is None
+
+
+async def test_takeoff_csv_has_the_requested_columns(client):
+    doc = await _plumbing_doc(client)
+    await client.post(f"/api/takeoff/{doc}/generate", json={"discipline": "lighting"})
+    csv = (await client.get(f"/api/takeoff/{doc}/export.csv")).text
+    header = csv.splitlines()[0].lstrip("﻿")
+    assert header.startswith("Category,Item,Description,Model / specification,Quantity,Unit,")
+    assert "Drawing source,Status,Confidence" in header
+    assert "LITHONIA 2BLT4" in csv and "E2.01" in csv and "Verified" in csv
+
+
+async def test_generate_needs_an_index_and_a_valid_discipline(client):
+    r = await client.post("/api/documents/upload", files={"file": ("x.pdf", __import__("backend.evals.count_sample", fromlist=["x"]).build_count_pdf(), "application/pdf")})
+    doc = r.json()["id"]
+    assert (await client.post(f"/api/takeoff/{doc}/generate", json={"discipline": "lighting"})).status_code == 409
+    assert (await client.post(f"/api/takeoff/{doc}/generate", json={"discipline": "plasma"})).status_code == 422

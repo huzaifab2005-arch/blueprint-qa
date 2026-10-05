@@ -88,7 +88,7 @@ def _lighting_plan(c, w, h, l1_on_plan, pendants=0):
 
 
 def build_count_pdf(*, schedule_qty_l1: int = 8, l1_on_plan: int = 8, rotate_first: int = 0,
-                    pendants: int = 0) -> bytes:
+                    pendants: int = 0, plumbing: bool = False) -> bytes:
     """rotate_first=270 stores page 1 as a portrait page with /Rotate 270 whose content
     is authored to display upright in landscape, as CAD exports of landscape sheets do."""
     from reportlab.pdfgen import canvas
@@ -139,6 +139,30 @@ def build_count_pdf(*, schedule_qty_l1: int = 8, l1_on_plan: int = 8, rotate_fir
     c.drawString(60, 1130, "ROOFTOP UNIT SCHEDULE")
     _title_block(c, "MECHANICAL SCHEDULES", "M6.01")
     c.showPage()
+
+    if plumbing:
+        # P2.01 PLUMBING PLAN: 2 x WC-1, 3 x LAV-1, 1 x FD-1 (tags beside simple symbols)
+        _grid(c, PAGE[0], PAGE[1])
+        c.setFont("Helvetica", 9)
+        for i in range(2):
+            c.circle(120 + i * 90, 700, 10); c.drawString(135 + i * 90, 696, "WC-1")
+        for i in range(3):
+            c.rect(120 + i * 90, 600, 18, 12); c.drawString(142 + i * 90, 602, "LAV-1")
+        c.circle(120, 500, 6); c.drawString(132, 497, "FD-1")
+        _title_block(c, "PLUMBING PLAN", "P2.01")
+        c.showPage()
+        # P6.01 PLUMBING FIXTURE SCHEDULE (no QTY column: quantity comes from the plan)
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(60, 1100, "MARK"); c.drawString(120, 1100, "DESCRIPTION"); c.drawString(300, 1100, "MANUFACTURER")
+        c.drawString(430, 1100, "MODEL")
+        c.setFont("Helvetica", 9)
+        for y, row in ((1080, ("WC-1", "WATER CLOSET, FLOOR MOUNT", "KOHLER", "K-96053")),
+                       (1060, ("LAV-1", "LAVATORY, WALL HUNG", "AMERICAN STD", "0356.421")),
+                       (1040, ("FD-1", "FLOOR DRAIN, 4 IN", "ZURN", "ZN415"))):
+            for x, t in zip((60, 120, 300, 430), row):
+                c.drawString(x, y, t)
+        _title_block(c, "PLUMBING FIXTURE SCHEDULE", "P6.01")
+        c.showPage()
     c.save()
     data = buf.getvalue()
     if rotate_first:

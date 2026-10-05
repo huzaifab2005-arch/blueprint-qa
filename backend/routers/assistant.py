@@ -17,9 +17,12 @@ from backend.schemas.assistant import (
     ReferenceRead, SearchResponseRead, SearchResultRead, SnippetRead,
 )
 from backend.services.assistant_service import (
-    AssistantError, NotIndexed, answer_question,
+    Answer, AssistantError, NotIndexed, answer_question,
 )
 from backend.services.counting.count_answer import answer_count_question
+from backend.services.counting.count_service import PageMeta
+from backend.services.takeoff.answer import MENU, build_answer
+from backend.services.takeoff.disciplines import is_takeoff_request, parse_takeoff_request
 from backend.services.counting.objects import is_count_question, parse_count_question
 from backend.services.counting.pdf_geometry import PageGeometry, load_geometry
 from backend.services.drawing_metadata import normalise_sheet_key, page_label
@@ -157,13 +160,25 @@ async def ask(document_id: uuid.UUID, body: AskRequest, db: AsyncSession = Depen
         .limit(settings.assistant_history_messages)
     )).scalars().all()))
 
-    parsed = parse_count_question(question) if is_count_question(question) else None
-    # Counting reads the PDF directly and works without a key (its optional vision
-    # estimate checks for one itself); only the language-model path requires it.
-    if parsed is None and not settings.nvidia_api_key:
+    takeoff = is_takeoff_request(question)
+    parsed = parse_count_question(question) if (is_count_question(question) and not takeoff) else None
+    # Counting and takeoffs read the PDF directly and work without a key (counting's optional
+    # vision estimate checks for one itself); only the language-model path requires it.
+    if parsed is None and not takeoff and not settings.nvidia_api_key:
         raise HTTPException(status_code=503, detail="NVIDIA_API_KEY is not configured on the server.")
     try:
-        if parsed is not None:
+        if takeoff:
+            from backend.routers.takeoff import generate_discipline
+            disc = parse_takeoff_request(question)
+            if disc is None:
+                result = Answer(answer=MENU, verified=False, confidence=None, sources=[], pages_searched=[], warnings=[])
+            else:
+                gen = await generate_discipline(db, document, disc)
+                rows = (await db.execute(
+                    select(DocumentPage).where(DocumentPage.document_id == document_id).order_by(DocumentPage.page_number)
+                )).scalars().all()
+                result = build_answer(gen, {r.page_number: PageMeta(r.page_number, r.sheet_number, r.sheet_title, "") for r in rows})
+        elif parsed is not None:
             pages = list((await db.execute(
                 select(DocumentPage)
                 .where(DocumentPage.document_id == document_id)
