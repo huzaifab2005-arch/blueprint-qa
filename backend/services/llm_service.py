@@ -6,6 +6,7 @@ import io
 from PIL import Image
 from openai import AsyncOpenAI
 from backend.config import get_settings
+from backend.services.dimension_check import find_dimension_conflicts
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -137,7 +138,11 @@ async def analyze_page(
         logger.warning("Page %s: unexpected JSON payload type %s", page_num, type(payload))
         return []
 
-    return _drop_contradicted(_normalise(issues, page_num), ocr_text, page_num)
+    kept = _drop_contradicted(_normalise(issues, page_num), ocr_text, page_num)
+    # Deterministic OCR-text check; only the model's own dimension findings are deduplicated.
+    if not any(i["issue_type"] == "dimension_mismatch" for i in kept):
+        kept.extend(find_dimension_conflicts(ocr_text))
+    return kept
 
 
 def _parse_payload(raw: str):
