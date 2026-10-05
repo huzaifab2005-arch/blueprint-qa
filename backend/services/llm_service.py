@@ -1,4 +1,5 @@
 import base64
+import re
 import json
 import logging
 import io
@@ -136,7 +137,7 @@ async def analyze_page(
         logger.warning("Page %s: unexpected JSON payload type %s", page_num, type(payload))
         return []
 
-    return _normalise(issues, page_num)
+    return _drop_contradicted(_normalise(issues, page_num), ocr_text, page_num)
 
 
 def _parse_payload(raw: str):
@@ -163,6 +164,38 @@ def _parse_payload(raw: str):
         if isinstance(obj, dict) and "issues" in obj:
             return obj
     return None
+
+
+# Equipment-style tags such as AHU-1, P-101A, FCU2.
+_TAG_RE = re.compile(r"\b[A-Z]{1,5}-?\d+[A-Z]?\b")
+# "SCALE: ...", "NTS", or an explicit ratio such as 1/4" = 1'-0".
+_SCALE_RE = re.compile(r"\bscale\b|\bNTS\b|\d\s*[\"']\s*=\s*\d", re.IGNORECASE)
+
+
+def _drop_contradicted(issues: list[dict], ocr_text: str, page_num: int) -> list[dict]:
+    """Drop findings the OCR text directly contradicts.
+
+    The model often reports a missing scale when a scale note exists, or an
+    "untagged" item whose tag it just quoted from the OCR text. These checks are
+    deterministic, so they remove those false positives without costing recall.
+    """
+    if not ocr_text:
+        return issues
+
+    ocr_upper = ocr_text.upper()
+    kept: list[dict] = []
+    for issue in issues:
+        kind = issue["issue_type"]
+        if kind == "missing_scale" and _SCALE_RE.search(ocr_text):
+            logger.debug("Page %s: dropping missing_scale, OCR text states a scale", page_num)
+            continue
+        if kind in ("missing_tag", "unlabeled_element"):
+            tags = _TAG_RE.findall(issue["description"].upper())
+            if any(tag in ocr_upper for tag in tags):
+                logger.debug("Page %s: dropping %s, tag %s is in OCR text", page_num, kind, tags)
+                continue
+        kept.append(issue)
+    return kept
 
 
 def _normalise(issues: list, page_num: int) -> list[dict]:
