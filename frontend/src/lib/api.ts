@@ -470,3 +470,36 @@ export const deleteTakeoffItem = (documentId: string, itemId: string) =>
   request<void>(`/api/takeoff/${documentId}/items/${itemId}`, { method: 'DELETE' });
 
 export const takeoffCsvUrl = (documentId: string) => `${API_BASE}/api/takeoff/${documentId}/export.csv`;
+
+// ── Set checks ──
+
+export interface Finding {
+  id: string;
+  check: string;
+  severity: 'high' | 'medium' | 'low';
+  confidence: 'high' | 'medium' | 'low';
+  page_number: number;
+  label: string;
+  message: string;
+  evidence: string[];
+  box: { x: number; y: number; w: number; h: number } | null;
+  dismissed: boolean;
+}
+
+export interface SetChecks {
+  findings: Finding[];
+  pages_checked: number;
+  pages_skipped: number;
+  checks_run: string[];
+  summary: string;
+  disclaimer: string;
+}
+
+export const getChecks = (documentId: string, includeDismissed = false) =>
+  request<SetChecks>(`/api/checks/${documentId}${includeDismissed ? '?include_dismissed=true' : ''}`);
+
+export const dismissFinding = (documentId: string, findingId: string) =>
+  request<unknown>(`/api/checks/${documentId}/dismissals`, { method: 'POST', body: JSON.stringify({ finding_id: findingId }) });
+
+export const restoreFinding = (documentId: string, findingId: string) =>
+  request<void>(`/api/checks/${documentId}/dismissals?finding_id=${encodeURIComponent(findingId)}`, { method: 'DELETE' });

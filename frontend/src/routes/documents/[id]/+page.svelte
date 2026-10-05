@@ -8,8 +8,9 @@
   import Assistant from '$lib/components/Assistant.svelte';
   import DrawingSearch from '$lib/components/DrawingSearch.svelte';
   import Takeoff from '$lib/components/Takeoff.svelte';
+  import SetChecks from '$lib/components/SetChecks.svelte';
 
-  let tab: 'qa' | 'assistant' | 'search' | 'takeoff' = 'qa';
+  let tab: 'qa' | 'assistant' | 'search' | 'takeoff' | 'checks' = 'qa';
 
   let document: Document | null = null;
   let issues: Issue[] = [];
@@ -180,6 +181,11 @@
       class="-mb-px border-b-2 px-4 py-2 text-sm font-medium {tab === 'takeoff' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'}"
       on:click={() => (tab = 'takeoff')}
     >Takeoff</button>
+    <button
+      role="tab" aria-selected={tab === 'checks'}
+      class="-mb-px border-b-2 px-4 py-2 text-sm font-medium {tab === 'checks' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'}"
+      on:click={() => (tab = 'checks')}
+    >Set Checks</button>
   </div>
 
   {#if tab === 'assistant'}
@@ -192,6 +198,10 @@
 
   {#if tab === 'takeoff'}
     <Takeoff documentId={document.id} />
+  {/if}
+
+  {#if tab === 'checks'}
+    <SetChecks documentId={document.id} />
   {/if}
 
   {#if tab === 'qa'}

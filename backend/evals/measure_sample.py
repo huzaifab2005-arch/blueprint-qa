@@ -9,6 +9,8 @@ Variants model what goes wrong on real sheets:
   with_dims  False = a plan with a scale label but no dimension annotations
   detail     a second drawing on the sheet at a different scale (1" = 1'-0")
   label      the scale text ("SCALE: AS NOTED" for a sheet with no usable scale)
+  wrong_dim  one dimension's text disagrees with the length drawn (21'-0" over 18'-0")
+  notes      extra text lines written on the sheet (cross-references)
 """
 import io
 
@@ -17,7 +19,8 @@ PT_PER_FT = 9.0          # 1/8" = 1'-0" on paper
 
 
 def build_measure_pdf(*, shrink: float = 1.0, with_dims: bool = True, detail: bool = False,
-                      label: str = 'SCALE: 1/8" = 1\'-0"') -> bytes:
+                      label: str = 'SCALE: 1/8" = 1\'-0"', wrong_dim: bool = False,
+                      notes: tuple[str, ...] = ()) -> bytes:
     from reportlab.pdfgen import canvas
 
     buf = io.BytesIO()
@@ -45,12 +48,16 @@ def build_measure_pdf(*, shrink: float = 1.0, with_dims: bool = True, detail: bo
         d(0, 96, 20, "10'-8\"")
         d(96, 216, 20, "13'-4\"")
         d(0, 54, 60, "6'-0\"")
-        d(54, 216, 60, "18'-0\"")
+        d(54, 216, 60, "21'-0\"" if wrong_dim else "18'-0\"")
 
     # the scale label, under the plan
     c.setFont("Helvetica", 9)
     c.drawString(ox, oy - 30, "FLOOR PLAN")
     c.drawString(ox, oy - 42, label)
+
+    for i, note in enumerate(notes):
+        c.setFont("Helvetica", 9)
+        c.drawString(ox, oy - 70 - 14 * i, note)
 
     if detail:
         dx, dy = 450.0, 700.0

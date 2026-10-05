@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import DBAPIError, OperationalError
 from backend.database import create_tables, check_connection
-from backend.routers import documents, analysis, assistant, measure, takeoff
+from backend.routers import documents, analysis, assistant, measure, takeoff, checks
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ app.include_router(analysis.router)
 app.include_router(assistant.router)
 app.include_router(measure.router)
 app.include_router(takeoff.router)
+app.include_router(checks.router)
 
 
 @app.exception_handler(OperationalError)

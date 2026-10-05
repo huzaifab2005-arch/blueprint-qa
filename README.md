@@ -100,6 +100,22 @@ The **Takeoff** tab collects quantities into lines. A line comes from a count, f
 
 Limits: lines are only as good as the counts and measurements behind them; there are no prices, assemblies or unit conversions between units, and area counts ("in the BOH") are not filtered by room. Treat the result as a starting list to check against the drawings, not a bid.
 
+### Set checks (Phase 6)
+
+The **Set Checks** tab runs cross-sheet checks over an indexed set and lists what a reviewer should look at. It sits beside the existing AI QA report and does not change it. Each finding gives the sheet, what was seen, the evidence, a severity (how much it matters if real) and a confidence (how sure the check is); "View sheet" opens the page with the spot outlined.
+
+| Check | Flags |
+|---|---|
+| Duplicate sheet number | two pages with the same sheet number |
+| Drawing list | a sheet named on the cover's "LIST OF DRAWINGS" that is not in the set, and sheets in the set that the list omits (numeric ranges like `0.0-0.8` are honoured) |
+| Missing reference | "SEE E9.01" where no such sheet exists (only structured letter-prefixed numbers after a cue word, so dimensions and clause numbers are not mistaken for sheets) |
+| Scale | a stated scale that disagrees with the sheet's own tick-marked dimensions (a reduced print, or a wrong label) |
+| Dimension | one dimension whose text differs by >10% (and >6") from the length drawn, on a sheet whose other dimensions agree with each other; details at a different scale are not flagged |
+
+The checks are deliberately conservative: on the real 25-sheet test set they raise nothing, and they do find each planted fault in synthetic sheets (wrong dimension, reduced print, missing reference, missing/extra sheet). Findings are prompts to look, not verdicts, and "nothing flagged" is not a guarantee the set is correct. A finding can be dismissed (it stays dismissed until its content changes) and restored.
+
+Not checked yet: schedule-versus-plan tag consistency, title-block data (project name, dates, revisions) across sheets, and cross-sheet language-model questions.
+
 ### Running against the real NVIDIA API
 
 Question answering and the counting fallback call a hosted vision model; everything else (indexing, retrieval, counting from tags/legends/schedules) runs without it. To evaluate the full pipeline with a real key:
