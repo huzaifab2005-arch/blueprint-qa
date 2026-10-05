@@ -310,3 +310,89 @@ export function getReferences(documentId: string, pageNumber: number): Promise<S
 export function thumbnailUrl(documentId: string, pageNumber: number, width = 240): string {
   return `${API_BASE}/api/assistant/${documentId}/pages/${pageNumber}/thumbnail?w=${width}`;
 }
+
+// ── Measurement ────────────────────────────────────────────────────────────
+
+export type ScaleStatus = 'verified' | 'measured' | 'calibrated' | 'stated' | 'conflict';
+
+export interface SheetScale {
+  index: number;
+  ratio: number;
+  text: string;
+  source: 'stated' | 'measured' | 'calibrated';
+  status: ScaleStatus;
+  support: number;
+  system: 'imperial' | 'metric';
+  calibration_id: string | null;
+}
+
+export interface SheetScales {
+  page_number: number;
+  width_pt: number;
+  height_pt: number;
+  scales: SheetScale[];
+  primary: number | null;
+  notes: string[];
+  dimension_samples: number;
+}
+
+export type MeasureKind = 'length' | 'polyline' | 'area';
+
+export interface Measurement {
+  id: string;
+  page_number: number;
+  kind: MeasureKind;
+  label: string;
+  points: [number, number][];
+  value_in: number | null;
+  value_sqin: number | null;
+  display: string;
+  display_other: string;
+  perimeter_display: string | null;
+  uncertainty_in: number;
+  uncertainty_display: string;
+  scale_ratio: number;
+  scale_text: string;
+  scale_status: ScaleStatus;
+  warnings: string[];
+  created_at: string;
+}
+
+export const getScale = (documentId: string, page: number) =>
+  request<SheetScales>(`/api/measure/${documentId}/pages/${page}/scale`);
+
+export const getSnapPoints = (documentId: string, page: number) =>
+  request<{ page_number: number; count: number; points: [number, number][] }>(
+    `/api/measure/${documentId}/pages/${page}/snap`
+  );
+
+export const listMeasurements = (documentId: string, page: number) =>
+  request<Measurement[]>(`/api/measure/${documentId}/measurements?page=${page}`);
+
+export const createMeasurement = (
+  documentId: string,
+  page: number,
+  body: { kind: MeasureKind; points: [number, number][]; snapped: boolean[]; label?: string; scale_index?: number | null }
+) =>
+  request<Measurement>(`/api/measure/${documentId}/pages/${page}/measurements`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+
+export const renameMeasurement = (documentId: string, id: string, label: string) =>
+  request<Measurement>(`/api/measure/${documentId}/measurements/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ label }),
+  });
+
+export const deleteMeasurement = (documentId: string, id: string) =>
+  request<void>(`/api/measure/${documentId}/measurements/${id}`, { method: 'DELETE' });
+
+export const createCalibration = (documentId: string, page: number, points: [number, number][], length: string) =>
+  request<SheetScales>(`/api/measure/${documentId}/pages/${page}/calibrations`, {
+    method: 'POST',
+    body: JSON.stringify({ points, length }),
+  });
+
+export const deleteCalibration = (documentId: string, id: string) =>
+  request<void>(`/api/measure/${documentId}/calibrations/${id}`, { method: 'DELETE' });

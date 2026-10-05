@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount, tick } from 'svelte';
+  import MeasureLayer from './MeasureLayer.svelte';
   import { getHighlights, getReferences, pageImageUrl } from '$lib/api';
   import type { Box, CountMarker, DrawingPage, Evidence, SheetReference } from '$lib/api';
 
@@ -96,7 +97,10 @@
     focusEl?.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
   }
 
+  let measuring = false;
+
   function onKey(e: KeyboardEvent) {
+    if (measuring) return;   // the measure layer owns the keyboard (Esc, Enter, Backspace)
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     if (e.key === 'Escape') dispatch('close');
     else if (e.key === 'ArrowRight') go(1);
@@ -156,6 +160,8 @@
           title="Outline each counted object on the sheet"
         >Markers ({pageMarkers.length})</button>
       {/if}
+      <button class="btn-secondary text-xs {measuring ? 'ring-2 ring-orange-400' : ''}" on:click={() => (measuring = !measuring)}
+        aria-pressed={measuring} title="Measure lengths and areas on this sheet">Measure</button>
       <span class="mx-1 h-5 w-px bg-gray-200"></span>
       {#each [['fit', 'Fit'], [1, '100%'], [2, '200%'], [3, '300%']] as [z, label]}
         <button class="btn-secondary text-xs {zoom === z ? 'ring-2 ring-blue-500' : ''}" on:click={() => (zoom = z as Zoom)}>{label}</button>
@@ -256,7 +262,7 @@
             {/each}
           </svg>
         {/if}
-        {#if loaded}
+        {#if loaded && !measuring}
           {#each refs as r}
             <button
               class="absolute cursor-pointer rounded-sm border-2 border-dashed border-blue-500 bg-blue-500/10 hover:bg-blue-500/30"
@@ -267,6 +273,9 @@
               on:click={() => follow(r.target_page)}
             ></button>
           {/each}
+        {/if}
+        {#if loaded && measuring}
+          <MeasureLayer {documentId} {pageNumber} on:exit={() => (measuring = false)} />
         {/if}
       </div>
     {/if}

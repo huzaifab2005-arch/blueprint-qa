@@ -73,6 +73,18 @@ Things it deliberately does not do: a size you ask about (2x4) is never answered
 
 Limits: it counts what the legend or tags identify, so fixture types without a legend entry are not included (the answer says so); area filters need room boundaries, which are not read; scanned drawings without vector data fall back to the (flagged) vision estimate. `false_verified_rate` in the eval harness (`backend/evals/count_sample.py`) is the metric to watch: a count that is wrong but reported as cross-checked or single-source must never happen.
 
+### Measurement (Phase 4)
+
+Click **Measure** in the page viewer to measure lengths, paths and areas on a sheet.
+
+- **Scale is verified, not trusted.** The stated scale ("3/16" = 1'-0"") is compared with the sheet's own tick-marked dimension lines (the real distance between ticks versus the dimension text). Each scale gets a status: `verified` (dimensions agree), `measured` (derived from dimensions, e.g. a reduced print), `calibrated` (you set it), `stated` (written on the sheet but not confirmed) or `conflict` (disagrees with the dimensions). Sheets with several scales list each one; measurements use the nearest unless you pick one.
+- **Calibrate** by clicking both ends of a length you know and typing it (`12'-7"`, `24"`, `1200 mm`). Calibrations are saved per sheet and can be removed.
+- **Snapping.** Clicks snap to the drawing's own vector corners (green ring); hold Alt to place freely.
+- **Uncertainty is reported** with every value (click precision plus scale spread), in imperial and metric. Warnings are shown for stated-only or conflicting scales and multi-scale sheets. With no scale found, measuring is refused until you calibrate.
+- Measurements are saved per document page (rename/delete) via `/api/measure/...`.
+
+Limits: only horizontal dimension text is used to verify a scale; dimensions without tick marks are not used; scanned (raster-only) sheets have no snap points and rely on calibration. Treat results as checks to confirm against the dimensions on the drawing, not as certified quantities.
+
 ### Running against the real NVIDIA API
 
 Question answering and the counting fallback call a hosted vision model; everything else (indexing, retrieval, counting from tags/legends/schedules) runs without it. To evaluate the full pipeline with a real key:

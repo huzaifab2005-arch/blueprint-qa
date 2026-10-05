@@ -562,3 +562,115 @@ async def test_navigation_endpoints_degrade_when_the_pdf_is_gone(client, tmp_pat
     assert r.status_code == 404 and "no longer in storage" in r.json()["detail"]
     # Text search needs only the database, so it still works.
     assert (await client.get(f"/api/assistant/{doc}/search", params={"q": "ceiling"})).status_code == 200
+
+
+# ── Phase 4: measurement through the API ────────────────────────────────────
+
+# The synthetic room (evals/measure_sample.py): lower-left (120, 700) pt, 216 x 144 pt, on a 792 x 1224 page.
+ROOM = {"x0": 120 / 792, "x1": 336 / 792, "top": (1224 - 844) / 1224, "bottom": (1224 - 700) / 1224}
+
+
+async def _upload_measure_sheet(client, **kw):
+    from backend.evals.measure_sample import build_measure_pdf
+
+    r = await client.post("/api/documents/upload",
+                          files={"file": ("m.pdf", build_measure_pdf(**kw), "application/pdf")})
+    doc = r.json()["id"]
+    await client.post(f"/api/assistant/{doc}/index")
+    assert (await client.get(f"/api/assistant/{doc}/index")).json()["status"] == "ready"
+    return doc
+
+
+def _across():
+    return [[ROOM["x0"], ROOM["top"]], [ROOM["x1"], ROOM["top"]]]
+
+
+async def test_scale_is_reported_with_how_it_was_checked(client):
+    doc = await _upload_measure_sheet(client)
+    s = (await client.get(f"/api/measure/{doc}/pages/1/scale")).json()
+    assert s["primary"] == 0 and s["dimension_samples"] == 5
+    sc = s["scales"][0]
+    assert sc["status"] == "verified" and sc["support"] == 5 and abs(sc["ratio"] - 96) < 0.6
+    assert "1/8" in sc["text"]
+
+
+async def test_measure_save_rename_and_delete(client):
+    doc = await _upload_measure_sheet(client)
+    r = await client.post(f"/api/measure/{doc}/pages/1/measurements",
+                          json={"kind": "length", "points": _across(), "snapped": [True, True], "label": "Room width"})
+    assert r.status_code == 201, r.text
+    m = r.json()
+    assert m["display"] == "24'-0\"" and m["display_other"].endswith("m") and m["scale_status"] == "verified"
+    assert abs(m["value_in"] - 288) < 0.6 and m["uncertainty_display"].startswith("±") and m["warnings"] == []
+
+    area = (await client.post(f"/api/measure/{doc}/pages/1/measurements", json={"kind": "area", "snapped": [True] * 4, "points": [
+        [ROOM["x0"], ROOM["top"]], [ROOM["x1"], ROOM["top"]], [ROOM["x1"], ROOM["bottom"]], [ROOM["x0"], ROOM["bottom"]]]})).json()
+    assert area["display"] == "384.0 sf" and area["perimeter_display"] == "80'-0\""
+
+    listed = (await client.get(f"/api/measure/{doc}/measurements", params={"page": 1})).json()
+    assert [x["kind"] for x in listed] == ["length", "area"]
+    ren = await client.patch(f"/api/measure/{doc}/measurements/{m['id']}", json={"label": "Width"})
+    assert ren.json()["label"] == "Width"
+    assert (await client.delete(f"/api/measure/{doc}/measurements/{m['id']}")).status_code == 204
+    assert len((await client.get(f"/api/measure/{doc}/measurements")).json()) == 1
+    assert (await client.delete(f"/api/measure/{doc}/measurements/{m['id']}")).status_code == 404
+
+
+async def test_a_reduced_print_still_measures_correctly(client):
+    doc = await _upload_measure_sheet(client, shrink=0.65)
+    box = {"x1": 120 / 792 + 216 * 0.65 / 792}
+    pts = [[120 / 792, (1224 - 700 - 144 * 0.65) / 1224], [box["x1"], (1224 - 700 - 144 * 0.65) / 1224]]
+    m = (await client.post(f"/api/measure/{doc}/pages/1/measurements", json={"kind": "length", "points": pts})).json()
+    assert m["scale_status"] == "measured" and m["display"] == "24'-0\""          # the stated 1/8" would have said 15'-7"
+    scale = (await client.get(f"/api/measure/{doc}/pages/1/scale")).json()
+    assert any(x["status"] == "conflict" for x in scale["scales"]) and any("reduced size" in n for n in scale["notes"])
+
+
+async def test_no_scale_means_no_measurement_until_calibrated(client):
+    doc = await _upload_measure_sheet(client, with_dims=False, label="SCALE: AS NOTED")
+    assert (await client.get(f"/api/measure/{doc}/pages/1/scale")).json()["scales"] == []
+    refused = await client.post(f"/api/measure/{doc}/pages/1/measurements", json={"kind": "length", "points": _across()})
+    assert refused.status_code == 422 and "Calibrate" in refused.json()["detail"]
+
+    # the user marks the room's known 24'-0" width and says so
+    cal = await client.post(f"/api/measure/{doc}/pages/1/calibrations", json={"points": _across(), "length": "24'-0\""})
+    assert cal.status_code == 201, cal.text
+    s = cal.json()
+    assert s["primary"] == 0 and s["scales"][0]["status"] == "calibrated" and abs(s["scales"][0]["ratio"] - 96) < 0.6
+
+    depth = [[ROOM["x0"], ROOM["top"]], [ROOM["x0"], ROOM["bottom"]]]
+    m = (await client.post(f"/api/measure/{doc}/pages/1/measurements", json={"kind": "length", "points": depth})).json()
+    assert m["display"] == "16'-0\"" and m["scale_status"] == "calibrated"
+
+    assert (await client.delete(f"/api/measure/{doc}/calibrations/{s['scales'][0]['calibration_id']}")).status_code == 204
+    assert (await client.get(f"/api/measure/{doc}/pages/1/scale")).json()["scales"] == []
+
+
+async def test_bad_calibration_and_bad_points_are_explained(client):
+    doc = await _upload_measure_sheet(client)
+    bad = await client.post(f"/api/measure/{doc}/pages/1/calibrations", json={"points": _across(), "length": "twelve"})
+    assert bad.status_code == 422 and "units" in bad.json()["detail"]
+    close = await client.post(f"/api/measure/{doc}/pages/1/calibrations",
+                              json={"points": [[0.5, 0.5], [0.5001, 0.5]], "length": "12'-0\""})
+    assert close.status_code == 422 and "too close" in close.json()["detail"]
+    off = await client.post(f"/api/measure/{doc}/pages/1/measurements", json={"kind": "length", "points": [[0, 0], [2, 2]]})
+    assert off.status_code == 422
+    one = await client.post(f"/api/measure/{doc}/pages/1/measurements", json={"kind": "area", "points": [[0.1, 0.1], [0.2, 0.2]]})
+    assert one.status_code == 422 and "three" in one.json()["detail"]
+
+
+async def test_an_unchecked_scale_is_flagged_on_every_measurement(client):
+    doc = await _upload_measure_sheet(client, with_dims=False)                    # label only: stated, unverified
+    m = (await client.post(f"/api/measure/{doc}/pages/1/measurements", json={"kind": "length", "points": _across()})).json()
+    assert m["scale_status"] == "stated" and any("nothing on the sheet confirms" in w for w in m["warnings"])
+
+
+async def test_snap_points_and_missing_pdf(client, tmp_path):
+    doc = await _upload_measure_sheet(client)
+    snap = (await client.get(f"/api/measure/{doc}/pages/1/snap")).json()
+    assert snap["count"] == len(snap["points"]) > 20
+    assert any(abs(x - ROOM["x0"]) < 0.001 and abs(y - ROOM["top"]) < 0.001 for x, y in snap["points"])   # the room's corner
+    for f in (tmp_path / "uploads").glob("*.pdf"):
+        f.unlink()
+    gone = await client.get(f"/api/measure/{doc}/pages/1/scale")
+    assert gone.status_code == 404 and "no longer in storage" in gone.json()["detail"]

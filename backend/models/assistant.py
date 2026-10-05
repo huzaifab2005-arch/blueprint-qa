@@ -8,7 +8,7 @@ startup (and by migration 0002).
 import uuid
 from datetime import datetime
 from sqlalchemy import (
-    JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint,
+    JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -69,4 +69,51 @@ class ChatMessage(Base):
     warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # Structured result of an object-count answer (see schemas.assistant.CountResultRead).
     count_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SheetCalibration(Base):
+    """A scale the user set by marking a known dimension on a sheet.
+
+    The most trustworthy scale there is: it comes from a length the user knows. It
+    applies near where it was made (a sheet can have several scales), identified by
+    the two points that define it.
+    """
+    __tablename__ = "sheet_calibrations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    ratio: Mapped[float] = mapped_column(Float, nullable=False)       # real / paper
+    known_length_in: Mapped[float] = mapped_column(Float, nullable=False)
+    known_text: Mapped[str] = mapped_column(String(64), nullable=False)   # as the user typed it
+    points: Mapped[list] = mapped_column(JSON, nullable=False)           # two [x, y] fractions of the page
+    system: Mapped[str] = mapped_column(String(16), nullable=False, default="imperial")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Measurement(Base):
+    """A saved measurement. Stores the scale it used and how that scale was checked,
+    so a value is never separated from the assumption behind it."""
+    __tablename__ = "measurements"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)        # length | polyline | area
+    label: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    points: Mapped[list] = mapped_column(JSON, nullable=False)           # [[x, y], ...] fractions of the page
+    value_in: Mapped[float | None] = mapped_column(Float, nullable=True)       # length / perimeter, inches
+    value_sqin: Mapped[float | None] = mapped_column(Float, nullable=True)     # area, square inches
+    display: Mapped[str] = mapped_column(String(64), nullable=False)
+    display_other: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    uncertainty_in: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    scale_ratio: Mapped[float] = mapped_column(Float, nullable=False)
+    scale_text: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    scale_status: Mapped[str] = mapped_column(String(16), nullable=False)       # verified | measured | calibrated | stated | conflict
+    warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
