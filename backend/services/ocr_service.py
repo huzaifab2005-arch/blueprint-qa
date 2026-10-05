@@ -36,11 +36,16 @@ def ocr_image(image: Image.Image) -> str:
         return ""
 
 
-def ocr_words(image: Image.Image) -> list[dict]:
-    """Return OCR words with bounding boxes, or [] if OCR is unavailable or fails."""
+def ocr_words(image: Image.Image, psm: int | None = None) -> list[dict]:
+    """Return OCR words with bounding boxes, or [] if OCR is unavailable or fails.
+
+    psm=11 (sparse text) also recovers small plan labels such as equipment and door tags
+    that the default page layout analysis drops.
+    """
     try:
         import pytesseract
-        data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+        config = f"--psm {psm}" if psm else ""
+        data = pytesseract.image_to_data(image, config=config, output_type=pytesseract.Output.DICT)
     except Exception as e:
         logger.warning(f"OCR word extraction failed: {e}")
         return []

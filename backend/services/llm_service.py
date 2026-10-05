@@ -13,7 +13,7 @@ from backend.services.dimension_check import (
     find_dimension_conflicts,
 )
 from backend.services.ocr_service import ocr_words
-from backend.services.rules import run_rules
+from backend.services.rules import run_rules, schedule_rows
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -173,12 +173,16 @@ async def analyze_page(
         return []
 
     kept = _drop_contradicted(_normalise(issues, page_num), ocr_text, page_num)
-    # Deterministic dimension checks; skipped when the model already reported one.
+    # Deterministic checks. Word boxes feed the positional dimension check and the tag checks.
+    words = await asyncio.to_thread(ocr_words, image)
     if not any(i["issue_type"] == "dimension_mismatch" for i in kept):
         kept.extend(find_dimension_conflicts(ocr_text))
-        words = await asyncio.to_thread(ocr_words, image)
         kept.extend(find_aligned_dimension_conflicts(words, image.width, image.height))
-    return _add_rule_findings(kept, ocr_text)
+    # Sparse-text OCR (recovers small plan labels) only matters when the page has a schedule.
+    plan_words = []
+    if len(schedule_rows(words, ocr_text)) >= 2:
+        plan_words = await asyncio.to_thread(ocr_words, image, 11)
+    return _add_rule_findings(kept, ocr_text, words, plan_words)
 
 
 def _parse_payload(raw: str):
@@ -230,21 +234,26 @@ _SCALE_RE = re.compile(r"\bscale\b|\bNTS\b|\d\s*[\"']\s*=\s*\d", re.IGNORECASE)
 
 # Tokens that identify what a rule finding is about: sheet ids, detail/section ids, materials.
 _RULE_TOKEN_RE = re.compile(
-    r"\b(?:[A-Z]{1,2}-?\d{3}|DETAIL\s+\d+|SECTION\s+[A-Z]-[A-Z]|CMU|GYP|CONCRETE|BRICK|STEEL|WOOD)\b"
+    r"\b(?:[A-Z]{1,5}-?\d{1,3}[A-Z]?|DETAIL\s+\d+|SECTION\s+[A-Z]-[A-Z]|CMU|GYP|CONCRETE|BRICK|STEEL|WOOD)\b"
 )
 
 
-def _add_rule_findings(model_issues: list[dict], ocr_text: str) -> list[dict]:
+def _add_rule_findings(
+    model_issues: list[dict], ocr_text: str, words: list[dict] | None = None, plan_words: list[dict] | None = None
+) -> list[dict]:
     """Append deterministic rule findings and drop model findings that repeat them."""
-    rule_issues = run_rules(ocr_text)
+    rule_issues = run_rules(ocr_text, words, plan_words)
     if not rule_issues:
         return model_issues
     covered = [
         {t.replace("  ", " ") for t in _RULE_TOKEN_RE.findall(" ".join(r["evidence"]).upper())}
         for r in rule_issues
     ]
+    rule_scale = any(r["issue_type"] == "missing_scale" for r in rule_issues)
     kept = []
     for issue in model_issues:
+        if rule_scale and issue["issue_type"] == "missing_scale":
+            continue
         mentioned = set(_RULE_TOKEN_RE.findall(issue["description"].upper()))
         if any(mentioned & tokens for tokens in covered):
             logger.debug("Dropping model finding duplicated by a rule: %s", issue["description"][:80])

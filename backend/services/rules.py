@@ -167,5 +167,157 @@ def check_spec_conflicts(ocr_text: str) -> list[dict]:
     return issues
 
 
-def run_rules(ocr_text: str) -> list[dict]:
-    return check_references(ocr_text) + check_spec_conflicts(ocr_text)
+# ------------------------------------------------------------- missing scale
+_SCALE_STATEMENT = re.compile(
+    r"\bSCALE\b|\bN\.?T\.?S\.?\b|\d\s*/\s*\d+\s*\"\s*=\s*\d|\d\s*[\"']\s*=\s*\d+['\"]|\b1\s*:\s*\d{2,}"
+)
+_VIEW_TITLE = re.compile(r"\b(?:PLAN|ELEVATION|SECTION|DETAIL)\b")
+_FEET_DIM = re.compile(r"\d+\s*'\s*-?\s*\d*")
+
+
+def check_missing_scale(ocr_text: str) -> list[dict]:
+    """Flag a drawing view with dimensions but no scale statement anywhere on the sheet.
+
+    Only judged when the page looks like a drawing (a view title and at least two
+    feet-and-inches dimensions): schedule and notes sheets legitimately carry no scale.
+    "DO NOT SCALE DRAWINGS" is a warning, not a scale statement.
+    """
+    if not ocr_text:
+        return []
+    text = re.sub(r"DO\s*NOT\s*SCALE|DON'?T\s*SCALE", " ", ocr_text.upper())
+    if _SCALE_STATEMENT.search(text):
+        return []
+    if not _VIEW_TITLE.search(text) or len(_FEET_DIM.findall(text)) < 2:
+        return []
+    return [_issue("missing_scale", "medium",
+                   "No scale or NTS note is given anywhere on this sheet, which has plan views and dimensions.", [])]
+
+
+# ------------------------------------------------------------------ tag checks
+_TAG = re.compile(r"^[A-Z]{1,5}-?\d{1,3}[A-Z]?$")
+_EQUIPMENT_PREFIXES = {
+    "AHU", "RTU", "FCU", "VAV", "CUH", "UH", "EF", "SF", "RF", "TF", "EXF", "HWP", "CWP", "CHWP", "PMP",
+    "BLR", "CH", "CT", "WH", "HP", "ERV", "HRV", "DOAS", "MAU", "MDP", "LP", "DP", "PNL", "XFMR", "TX",
+    "GEN", "ATS", "UPS",
+}
+
+
+def _tag_key(word: str) -> str | None:
+    w = word.strip(".,:;()").upper()
+    return w if _TAG.match(w) else None
+
+
+def _prefix(tag: str) -> str:
+    return re.match(r"[A-Z]+", tag).group(0)
+
+
+def _lines(words: list[dict]) -> list[list[dict]]:
+    rows: dict[tuple, list[dict]] = {}
+    for w in words:
+        rows.setdefault((w["block"], w["par"], w["line"]), []).append(w)
+    return [sorted(r, key=lambda w: w["left"]) for r in rows.values()]
+
+
+def _bbox(line: list[dict]) -> tuple:
+    return (min(w["left"] for w in line), min(w["top"] for w in line),
+            max(w["left"] + w["width"] for w in line), max(w["top"] + w["height"] for w in line))
+
+
+def _sheet_index_keys(ocr_text: str) -> set[str]:
+    text = (ocr_text or "").upper()
+    keys = {_norm(m.group(1)) for m in re.finditer(
+        rf"^\s*({_SHEET})\s+[A-Z][A-Z0-9 &/,.\-()']{{3,}}\s*$", text, re.MULTILINE)}
+    own = re.search(rf"SHEET\s*(?:NO|NUMBER|#)\.?\s*:?\s*({_SHEET})", text)
+    if own:
+        keys.add(_norm(own.group(1)))
+    return keys
+
+
+def schedule_rows(words: list[dict], ocr_text: str = "") -> dict[str, str]:
+    """Tags that start a multi-word text line (schedule rows): {normalised key: displayed tag}."""
+    skip = _sheet_index_keys(ocr_text)
+    rows: dict[str, str] = {}
+    for line in _lines(words):
+        if len(line) < 3:
+            continue
+        tag = _tag_key(line[0]["text"])
+        if not tag or _norm(tag) in skip:
+            continue
+        # a row has content after the tag: a description word or a dimension (door/window schedules)
+        if any(re.search(r"[A-Za-z]{3,}|\d\s*['\"]", w["text"]) for w in line[1:]):
+            rows[_norm(tag)] = tag
+    return rows
+
+
+def check_tags(words: list[dict], plan_words: list[dict], ocr_text: str = "") -> list[dict]:
+    """Compare schedule tags with the tags drawn on the plan.
+
+    `words` is the default-layout OCR (finds schedule rows); `plan_words` is a sparse-text
+    OCR pass that also recovers small plan labels. A tag word counts as a plan label only
+    if it is not part of a multi-word text line (schedule rows, notes, title block).
+    Reports: scheduled tags missing from the plan, plan tags of a scheduled family that are
+    not in the schedule, and equipment tags used on more than one unit.
+    """
+    schedule = schedule_rows(words, ocr_text)
+    if len(schedule) < 2 or not plan_words:
+        return []
+    skip = _sheet_index_keys(ocr_text)
+    text_boxes = [_bbox(l) for l in _lines(words) if len(l) >= 3]
+
+    def in_text(w) -> bool:
+        cx, cy = w["left"] + w["width"] / 2, w["top"] + w["height"] / 2
+        return any(x0 - 4 <= cx <= x1 + 4 and y0 - 4 <= cy <= y1 + 4 for x0, y0, x1, y1 in text_boxes)
+
+    plan: dict[str, list[tuple]] = {}
+    shown: dict[str, str] = {}
+    for w in plan_words:
+        tag = _tag_key(w["text"])
+        if not tag or _norm(tag) in skip or in_text(w):
+            continue
+        k = _norm(tag)
+        pos = (w["left"] + w["width"] / 2, w["top"] + w["height"] / 2)
+        if all(abs(pos[0] - p[0]) > 100 or abs(pos[1] - p[1]) > 60 for p in plan.get(k, [])):
+            plan.setdefault(k, []).append(pos)   # distinct locations only
+        shown.setdefault(k, tag)
+
+    issues = []
+    # Work per tag family (AHU-, D-, EF-...): a real schedule has several tags of one family,
+    # whereas stray tag-like words (CAT6, A-46) in notes do not.
+    families: dict[str, list[str]] = {}
+    for k, tag in schedule.items():
+        families.setdefault(_prefix(tag), []).append(k)
+    families = {f: ks for f, ks in families.items() if len(ks) >= 2}
+    if not families:
+        return []
+
+    for fam, keys in families.items():
+        present = [k for k in keys if k in plan]
+        if len(present) >= 2 and len(present) / len(keys) >= 2 / 3:
+            for k in keys:
+                if k not in plan:
+                    issues.append(_issue(
+                        "missing_tag", "medium",
+                        f"{schedule[k]} is listed in the schedule but is not tagged on the plan.", [schedule[k]]))
+
+    for k in plan:
+        fam = _prefix(shown[k])
+        if fam in families and k not in schedule:
+            issues.append(_issue(
+                "inconsistent_annotation", "medium",
+                f"{shown[k]} is tagged on the plan but is not in the schedule.", [shown[k]]))
+
+    for k, locs in plan.items():
+        # Only scheduled equipment tags: other tags (doors, fixtures) legitimately repeat.
+        if len(locs) >= 2 and k in schedule and _prefix(shown[k]) in _EQUIPMENT_PREFIXES:
+            issues.append(_issue(
+                "inconsistent_annotation", "high",
+                f"Tag {shown[k]} appears {len(locs)} times on the plan; equipment tags must be unique.",
+                [shown[k]]))
+    return issues
+
+
+def run_rules(ocr_text: str, words: list[dict] | None = None, plan_words: list[dict] | None = None) -> list[dict]:
+    out = check_references(ocr_text) + check_spec_conflicts(ocr_text) + check_missing_scale(ocr_text)
+    if words and plan_words:
+        out += check_tags(words, plan_words, ocr_text)
+    return out
