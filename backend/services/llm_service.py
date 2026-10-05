@@ -23,20 +23,22 @@ VALID_ISSUE_TYPES = {
 
 SYSTEM_PROMPT = """You are an expert construction drawing QA inspector. You analyze engineering drawings (mechanical, electrical, structural, civil) for quality issues. You are precise, technical, and thorough.\n\nYou reply with a single JSON object and nothing else. No prose, no explanation, no markdown code fences. The object has exactly one key, "issues", whose value is an array. If you find no issues, reply with {"issues": []}."""
 
-USER_PROMPT_TEMPLATE = """Analyze this engineering drawing page (page {page_num} of {total_pages}) for QA issues.
+USER_PROMPT_TEMPLATE = """Inspect this engineering drawing page (page {page_num} of {total_pages}) for QA defects. Drawings submitted for review usually contain several defects, so check carefully and report everything you can point to.
 
 OCR Text extracted from this page:
 ---
 {ocr_text}
 ---
 
-Look for these categories of issues:
-- missing_tag: Elements that should have labels/tags but don't (equipment tags, room numbers, pipe labels, etc.)
-- dimension_mismatch: Dimensions that appear inconsistent or contradictory
-- unlabeled_element: Symbols, components, or areas that are unidentified
-- inconsistent_annotation: Notes or callouts that conflict with drawing content
-- missing_scale: No scale bar or scale reference present
-- incomplete_detail: Sections or details referenced elsewhere but missing or truncated
+Work through each category in turn, comparing the image against the OCR text:
+- missing_tag: Equipment, rooms, pipes or symbols drawn without a tag/label while similar items are tagged.
+- dimension_mismatch: Dimensions for the same wall or element that disagree, or notes that give conflicting sizes.
+- unlabeled_element: Symbols, components or areas with no identification.
+- inconsistent_annotation: Notes or callouts that contradict each other or the drawing.
+- missing_scale: No scale bar or scale reference on the page.
+- incomplete_detail: Details, sections or sheets referenced in notes (e.g. "DETAIL 5/M-501", "SECTION B-B") that are not shown on this page.
+
+For each defect, quote the specific text or describe the specific element in the description so a reviewer can find it. Only report defects you can point to on this page; do not invent any.
 
 Reply with a single JSON object of exactly this shape:
 {{
@@ -44,14 +46,13 @@ Reply with a single JSON object of exactly this shape:
     {{
       "issue_type": "<one of: missing_tag, dimension_mismatch, unlabeled_element, inconsistent_annotation, missing_scale, incomplete_detail>",
       "severity": "<one of: low, medium, high>",
-      "description": "<clear explanation of the issue>",
+      "description": "<what is wrong, quoting the relevant text or element>",
       "location_hint": "<where on the page, e.g. top-right, center, room 204>"
     }}
   ]
 }}
 
-Use only the exact lowercase values listed for issue_type and severity.
-If no issues are found, reply with {{"issues": []}}."""
+Use only the exact lowercase values listed for issue_type and severity."""
 
 
 def _image_to_base64(image: Image.Image) -> str:
