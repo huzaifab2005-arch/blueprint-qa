@@ -112,9 +112,8 @@ async def analyze_page(
             inner_lines = inner_lines[:-1]
         raw = "\n".join(inner_lines).strip()
 
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
+    payload = _parse_payload(raw)
+    if payload is None:
         logger.warning("Page %s: model returned unparseable JSON: %s", page_num, raw[:200])
         return []
 
@@ -127,6 +126,32 @@ async def analyze_page(
         return []
 
     return _normalise(issues, page_num)
+
+
+def _parse_payload(raw: str):
+    """Parse the model reply as JSON, falling back to the first embedded object.
+
+    The model sometimes ignores json_object mode and wraps the JSON in prose
+    ("Upon examining the drawing... { "issues": [...] }"). Scan for a JSON
+    object inside the text rather than discarding the whole reply. Returns None
+    if nothing parseable is found.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    for start, ch in enumerate(raw):
+        if ch != "{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(raw, start)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "issues" in obj:
+            return obj
+    return None
 
 
 def _normalise(issues: list, page_num: int) -> list[dict]:
