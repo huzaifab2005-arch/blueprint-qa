@@ -9,6 +9,9 @@ from backend.config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Total tries per page when the reply contains no parseable JSON.
+MAX_ATTEMPTS = 3
+
 # Mirrors backend.models.issue.IssueSeverity and the categories the prompt lists.
 # Anything outside these sets is dropped in _normalise before it reaches the DB.
 VALID_SEVERITIES = {"low", "medium", "high"}
@@ -79,42 +82,50 @@ async def analyze_page(
         ocr_text=ocr_text or "(no text extracted)",
     )
 
-    response = await client.chat.completions.create(
-        model=settings.llm_vision_model,
-        max_tokens=settings.llm_max_tokens,
-        temperature=0.2,
-        # Enforced JSON. Without it this model reliably ignores "reply with JSON"
-        # and answers in markdown prose, which json.loads cannot recover from.
-        # json_object mode requires an object, hence the {"issues": [...]} wrapper.
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_content},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                    },
-                ],
-            },
-        ],
-    )
-    raw = (response.choices[0].message.content or "").strip()
+    # The model occasionally ignores the JSON-only instruction and replies with
+    # prose only. Sampling is non-deterministic, so retrying usually recovers.
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        response = await client.chat.completions.create(
+            model=settings.llm_vision_model,
+            max_tokens=settings.llm_max_tokens,
+            temperature=0.2,
+            # Enforced JSON. Without it this model reliably ignores "reply with JSON"
+            # and answers in markdown prose, which json.loads cannot recover from.
+            # json_object mode requires an object, hence the {"issues": [...]} wrapper.
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_content},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                        },
+                    ],
+                },
+            ],
+        )
+        raw = (response.choices[0].message.content or "").strip()
 
-    # Defensive: json_object mode should make fences impossible, but a model that
-    # ignores it once should not take the whole page down.
-    if raw.startswith("```"):
-        lines = raw.split("\n")
-        inner_lines = lines[1:]
-        if inner_lines and inner_lines[-1].strip() == "```":
-            inner_lines = inner_lines[:-1]
-        raw = "\n".join(inner_lines).strip()
+        # Defensive: json_object mode should make fences impossible, but a model that
+        # ignores it once should not take the whole page down.
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            inner_lines = lines[1:]
+            if inner_lines and inner_lines[-1].strip() == "```":
+                inner_lines = inner_lines[:-1]
+            raw = "\n".join(inner_lines).strip()
 
-    payload = _parse_payload(raw)
-    if payload is None:
-        logger.warning("Page %s: model returned unparseable JSON: %s", page_num, raw[:200])
+        payload = _parse_payload(raw)
+        if payload is not None:
+            break
+        logger.warning(
+            "Page %s: model returned unparseable JSON (attempt %d/%d): %s",
+            page_num, attempt, MAX_ATTEMPTS, raw[:200],
+        )
+    else:
         return []
 
     if isinstance(payload, list):
