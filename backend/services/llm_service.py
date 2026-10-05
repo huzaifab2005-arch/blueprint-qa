@@ -13,6 +13,7 @@ from backend.services.dimension_check import (
     find_dimension_conflicts,
 )
 from backend.services.ocr_service import ocr_words
+from backend.services.rules import run_rules
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -177,7 +178,7 @@ async def analyze_page(
         kept.extend(find_dimension_conflicts(ocr_text))
         words = await asyncio.to_thread(ocr_words, image)
         kept.extend(find_aligned_dimension_conflicts(words, image.width, image.height))
-    return kept
+    return _add_rule_findings(kept, ocr_text)
 
 
 def _parse_payload(raw: str):
@@ -225,6 +226,31 @@ def _salvage_issues(raw: str):
 _TAG_RE = re.compile(r"\b[A-Z]{1,5}-?\d+[A-Z]?\b")
 # "SCALE: ...", "NTS", or an explicit ratio such as 1/4" = 1'-0".
 _SCALE_RE = re.compile(r"\bscale\b|\bNTS\b|\d\s*[\"']\s*=\s*\d", re.IGNORECASE)
+
+
+# Tokens that identify what a rule finding is about: sheet ids, detail/section ids, materials.
+_RULE_TOKEN_RE = re.compile(
+    r"\b(?:[A-Z]{1,2}-?\d{3}|DETAIL\s+\d+|SECTION\s+[A-Z]-[A-Z]|CMU|GYP|CONCRETE|BRICK|STEEL|WOOD)\b"
+)
+
+
+def _add_rule_findings(model_issues: list[dict], ocr_text: str) -> list[dict]:
+    """Append deterministic rule findings and drop model findings that repeat them."""
+    rule_issues = run_rules(ocr_text)
+    if not rule_issues:
+        return model_issues
+    covered = [
+        {t.replace("  ", " ") for t in _RULE_TOKEN_RE.findall(" ".join(r["evidence"]).upper())}
+        for r in rule_issues
+    ]
+    kept = []
+    for issue in model_issues:
+        mentioned = set(_RULE_TOKEN_RE.findall(issue["description"].upper()))
+        if any(mentioned & tokens for tokens in covered):
+            logger.debug("Dropping model finding duplicated by a rule: %s", issue["description"][:80])
+            continue
+        kept.append(issue)
+    return kept + rule_issues
 
 
 def _drop_contradicted(issues: list[dict], ocr_text: str, page_num: int) -> list[dict]:
