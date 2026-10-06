@@ -22,7 +22,9 @@ DET_MARKERS = ("stacked over the same span", "is dimensioned inconsistently")
 
 def source_of(issue):
     d = issue["description"].lower()
-    return "deterministic" if any(m in d for m in DET_MARKERS) else "model"
+    if "evidence" in issue or any(m in d for m in DET_MARKERS):
+        return "deterministic"
+    return "model"
 
 
 def matches(defect, issue):

@@ -13,6 +13,7 @@ from backend.services.dimension_check import (
     find_dimension_conflicts,
 )
 from backend.services.ocr_service import ocr_words
+from backend.services.evidence import Corpus, cited_dimensions, validate_findings
 from backend.services.rules import run_rules, schedule_rows
 
 logger = logging.getLogger(__name__)
@@ -173,15 +174,27 @@ async def analyze_page(
         return []
 
     kept = _drop_contradicted(_normalise(issues, page_num), ocr_text, page_num)
-    # Deterministic checks. Word boxes feed the positional dimension check and the tag checks.
+    # Word boxes feed the evidence check, the positional dimension check and the tag checks.
     words = await asyncio.to_thread(ocr_words, image)
-    if not any(i["issue_type"] == "dimension_mismatch" for i in kept):
-        kept.extend(find_dimension_conflicts(ocr_text))
-        kept.extend(find_aligned_dimension_conflicts(words, image.width, image.height))
     # Sparse-text OCR (recovers small plan labels) only matters when the page has a schedule.
     plan_words = []
     if len(schedule_rows(words, ocr_text)) >= 2:
         plan_words = await asyncio.to_thread(ocr_words, image, 11)
+
+    # Only model findings are validated against the drawing text; rule findings are derived from it.
+    kept, dropped = validate_findings(kept, Corpus(ocr_text, words, plan_words))
+    for issue, reason in dropped:
+        logger.info("Page %s: dropping model finding (%s): %s", page_num, reason, issue["description"][:100])
+
+    # Deterministic dimension checks always run; a model dimension finding that cites the same
+    # dimensions is the duplicate and gives way to the deterministic one.
+    dimension_findings = find_dimension_conflicts(ocr_text) + find_aligned_dimension_conflicts(
+        words, image.width, image.height)
+    if dimension_findings:
+        covered = set().union(*(cited_dimensions(d["description"]) for d in dimension_findings))
+        kept = [i for i in kept
+                if not (i["issue_type"] == "dimension_mismatch" and cited_dimensions(i["description"]) & covered)]
+    kept.extend(dimension_findings)
     return _add_rule_findings(kept, ocr_text, words, plan_words)
 
 
